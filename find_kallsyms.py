@@ -67,6 +67,8 @@ def find_token_tables(rodata, token_index, token_index_offset):
         # The last kallsyms_token_index element corresponds to the last token.
         # Use that information to locate kallsyms_token_table.
         token_table_offset = last_token_offset - token_index[-1]
+        if token_table_offset < 0:
+            continue
         token_table = try_parse_token_table(
             rodata, token_index, token_table_offset, token_table_end_offset)
         if token_table is not None:
@@ -134,13 +136,13 @@ def extract_name(rodata, token_table, offset):
 def find_num_syms(rodata, endianness, token_table, markers_offset):
     # kallsyms_names is a sequence of length-prefixed entries ending with
     # padding to an 8-byte boundary, followed by kallsyms_markers.
-    # Unfortunately, some guesswork to locate the start of kallsyms_names
-    # given that we know the start of kallsyms_markers.
+    # Unfortunately, some guesswork is required to locate the start of
+    # kallsyms_names given that we know the start of kallsyms_markers.
     num_syms_fmt = endianness + 'I'
     token_lengths = [len(token) for token in token_table]
     # Indexed by (markers_offset - offset - 1). Each element is a number of
-    # name entries that follow the respective offset, provided that offset is a
-    # start of a name entry.
+    # name entries that follow the respective offset, or None if that offset is
+    # not a start of a valid name entry.
     name_counts = []
     # Whether offset still points to one of the trailing zeroes.
     trailing_zeroes = True
@@ -164,8 +166,8 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
             continue
         if is_name_ok(rodata, token_lengths, offset):
             # The current name entry is valid. Check whether it is preceded by
-            # kallsyms_names, which is consistent with the number of name
-            # entries we've seen so far.
+            # kallsyms_num_syms value, which is consistent with the number of
+            # name entries we've seen so far.
             name_counts.append(next_name_count + 1)
             num_syms1, = struct.unpack(num_syms_fmt, rodata[offset - 4:offset])
             if name_counts[-1] == num_syms1:
@@ -196,9 +198,10 @@ def get_addresses(rodata, endianness, num_syms_offset, num_syms):
     address_fmt = endianness + 'i'
     kallsyms_relative_base, = struct.unpack(
         endianness + 'Q', rodata[num_syms_offset - 8:num_syms_offset])
-    offset = num_syms_offset - 8 - num_syms * 4
-    if offset % 8 != 0:
-        offset -= 4
+    addresses_offset = num_syms_offset - 8 - num_syms * 4
+    if addresses_offset % 8 != 0:
+        addresses_offset -= 4
+    offset = addresses_offset
     addresses = []
     for _ in range(num_syms):
         raw, = struct.unpack(address_fmt, rodata[offset:offset + 4])
@@ -207,7 +210,7 @@ def get_addresses(rodata, endianness, num_syms_offset, num_syms):
         else:
             addresses.append(kallsyms_relative_base - 1 - raw)
         offset += 4
-    return addresses
+    return addresses_offset, addresses
 
 
 def find_kallsyms_in_rodata(rodata, endianness):
@@ -231,8 +234,13 @@ def find_kallsyms_in_rodata(rodata, endianness):
                     logging.debug(
                         '0x%08X: kallsyms_num_syms=%s',
                         num_syms_offset, len(names))
-                    addresses = get_addresses(
+                    addresses_offset, addresses = get_addresses(
                         rodata, endianness, num_syms_offset, len(names))
+                    kallsyms_end = token_index_offset + (256 * 2)
+                    kallsyms_size = kallsyms_end - addresses_offset
+                    logging.debug(
+                        '0x%08X: kallsyms[0x%08X]',
+                        addresses_offset, kallsyms_size)
                     return zip(addresses, names)
     return []
 
