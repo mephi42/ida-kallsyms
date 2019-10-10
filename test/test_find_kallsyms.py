@@ -27,6 +27,13 @@ class TestFindKallsyms(unittest.TestCase):
         self.assertEquals('Airq_stack_union', addresses_and_names[0][1])
         self.assertEquals('B__brk_limit', addresses_and_names[-1][1])
 
+    def test_kallsyms_5_1_9_x86_64(self):
+        addresses_and_names = list(find_kallsyms_in_rodata(
+            self._read('kallsyms-5.1.9.balsnctl2019.krazynote.x86_64.gz'),
+            '<'))
+        self.assertEquals('Airq_stack_union', addresses_and_names[0][1])
+        self.assertEquals('B__brk_limit', addresses_and_names[-1][1])
+
 
 if __name__ == '__main__':
     unittest.main()
