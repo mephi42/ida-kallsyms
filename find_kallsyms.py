@@ -75,7 +75,7 @@ def find_markers(rodata, endianness, token_table_offset):
             if marker == 0:
                 marker_offset -= 4
                 continue
-        elif marker >= markers[-1]:
+        elif len(markers) > 0 and marker >= markers[-1]:
             return
         markers.append(marker)
         if marker == 0:
