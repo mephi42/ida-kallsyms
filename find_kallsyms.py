@@ -76,32 +76,41 @@ def find_token_tables(rodata, token_index, token_index_offset):
 
 
 def find_markers(rodata, endianness, token_table_offset):
-    marker_fmt = endianness + 'I'
-    first = True
-    marker_offset = token_table_offset - 4
-    markers = []
-    while True:
-        # kallsyms_markers is an array of monotonically increasing ints, which
-        # starts with 0. It is aligned on an 8-byte boundary, so if the number
-        # of elements is odd, it is zero-padded at the end.
-        marker, = struct.unpack(
-            marker_fmt, rodata[marker_offset:marker_offset + 4])
-        if first:
-            first = False
+    # In 4.20 the size of markers was reduced to 4 bytes.
+    for marker_fmt, marker_size in (
+                (endianness + 'I', 4),
+                (endianness + 'Q', 8),
+            ):
+        first = True
+        marker_offset = token_table_offset - marker_size
+        markers = []
+        while True:
+            # kallsyms_markers is an array of monotonically increasing offsets,
+            # which starts with 0. It is aligned on an 8-byte boundary, so if
+            # the element size is 4 bytes and their number is odd, it is zero-
+            # padded at the end.
+            marker, = struct.unpack(
+                marker_fmt, rodata[marker_offset:marker_offset + marker_size])
+            if first:
+                first = False
+                if marker == 0 and marker_size == 4:
+                    # Skip padding.
+                    marker_offset -= marker_size
+                    continue
+            elif len(markers) > 0 and marker >= markers[-1]:
+                # The array is not monotonically increasing.
+                return
+            markers.append(marker)
             if marker == 0:
-                # Skip padding.
-                marker_offset -= 4
-                continue
-        elif len(markers) > 0 and marker >= markers[-1]:
-            # The array is not monotonically increasing.
-            return
-        markers.append(marker)
-        if marker == 0:
-            # We found the first element.
-            break
-        marker_offset -= 4
-    markers.reverse()
-    yield marker_offset, markers
+                # We found the first element.
+                break
+            marker_offset -= marker_size
+        if marker_size == 4 and len(markers) == 2:
+            # Marker size must be 8 bytes, and we must be taking the upper
+            # part, which is always 0, for the first marker.
+            continue
+        markers.reverse()
+        yield marker_offset, markers
 
 
 def is_name_ok(rodata, token_lengths, offset):
