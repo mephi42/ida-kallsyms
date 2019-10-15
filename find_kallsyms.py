@@ -222,45 +222,47 @@ def get_addresses(rodata, endianness, num_syms_offset, num_syms):
     return addresses_offset, addresses
 
 
-def find_kallsyms_in_rodata(rodata, endianness):
-    for token_index_offset, token_index in find_token_indices(
-            rodata, endianness):
-        logging.debug(
-            '0x%08X: kallsyms_token_index=%s',
-            token_index_offset, token_index)
-        for token_table_offset, token_table in find_token_tables(
-                rodata, token_index, token_index_offset):
+def find_kallsyms_in_rodata(rodata):
+    for endianness in ('<', '>'):
+        logging.debug('Endianness: %s', endianness)
+        for token_index_offset, token_index in find_token_indices(
+                rodata, endianness):
             logging.debug(
-                '0x%08X: kallsyms_token_table=%s',
-                token_table_offset, token_table)
-            for markers_offset, markers in find_markers(
-                    rodata, endianness, token_table_offset):
+                '0x%08X: kallsyms_token_index=%s',
+                token_index_offset, token_index)
+            for token_table_offset, token_table in find_token_tables(
+                    rodata, token_index, token_index_offset):
                 logging.debug(
-                    '0x%08X: kallsyms_markers=%s',
-                    markers_offset, markers)
-                for num_syms_offset, names in find_num_syms(
-                        rodata, endianness, token_table, markers_offset):
+                    '0x%08X: kallsyms_token_table=%s',
+                    token_table_offset, token_table)
+                for markers_offset, markers in find_markers(
+                        rodata, endianness, token_table_offset):
                     logging.debug(
-                        '0x%08X: kallsyms_num_syms=%s',
-                        num_syms_offset, len(names))
-                    addresses_offset, addresses = get_addresses(
-                        rodata, endianness, num_syms_offset, len(names))
-                    kallsyms_end = token_index_offset + (256 * 2)
-                    kallsyms_size = kallsyms_end - addresses_offset
-                    logging.debug(
-                        '0x%08X: kallsyms[0x%08X]',
-                        addresses_offset, kallsyms_size)
-                    return zip(addresses, names)
+                        '0x%08X: kallsyms_markers=%s',
+                        markers_offset, markers)
+                    for num_syms_offset, names in find_num_syms(
+                            rodata, endianness, token_table, markers_offset):
+                        logging.debug(
+                            '0x%08X: kallsyms_num_syms=%s',
+                            num_syms_offset, len(names))
+                        addresses_offset, addresses = get_addresses(
+                            rodata, endianness, num_syms_offset, len(names))
+                        kallsyms_end = token_index_offset + (256 * 2)
+                        kallsyms_size = kallsyms_end - addresses_offset
+                        logging.debug(
+                            '0x%08X: kallsyms[0x%08X]',
+                            addresses_offset, kallsyms_size)
+                        return zip(addresses, names)
     return []
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    if len(sys.argv) != 3:
-        print('Usage: {} PATH ENDIANNESS'.format(sys.argv[0]))
+    if len(sys.argv) != 2:
+        print('Usage: {} PATH'.format(sys.argv[0]))
         sys.exit(1)
-    rodata_path, endianness = sys.argv[1:]
+    rodata_path, = sys.argv[1:]
     with open(rodata_path, 'rb') as fp:
         rodata = bytearray(fp.read())
-    for address, name in find_kallsyms_in_rodata(rodata, endianness):
+    for address, name in find_kallsyms_in_rodata(rodata):
         print('{:016X} {}'.format(address, name))
