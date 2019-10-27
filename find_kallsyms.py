@@ -50,6 +50,8 @@ def try_parse_token_table(rodata, token_index, start_offset, end_offset):
             return None  # Tokens must be printable.
         if token[-1] != 0:
             return None  # Tokens must be null-terminated.
+        if token[:-1] in tokens:
+            return None  # Tokens must not repeat
         tokens.append(token[:-1])
     return tokens
 
