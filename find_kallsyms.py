@@ -27,7 +27,7 @@ def find_token_indices(rodata, endianness):
         # Therefore, look for 1+2 consecutive zeroes.
         token_index_offset = rodata.find(
             b'\x00\x00\x00', token_index_offset) + 1
-        if token_index_offset == 0:
+        if token_index_offset == 0 or token_index_offset + 512 > len(rodata):
             break
         token_index = try_parse_token_index(
             rodata, endianness, token_index_offset)
@@ -180,14 +180,18 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
             # kallsyms_num_syms value, which is consistent with the number of
             # name entries we've seen so far.
             name_counts.append(next_name_count + 1)
-            num_syms1, = struct.unpack(num_syms_fmt, rodata[offset - 4:offset])
-            if name_counts[-1] == num_syms1:
-                num_syms_offset = offset - 4
-                break
-            num_syms2, = struct.unpack(
-                num_syms_fmt, rodata[offset - 8:offset - 4])
-            if name_counts[-1] == num_syms2:
-                num_syms_offset = offset - 8
+            num_syms_offset = None
+            # How kallsyms_num_syms is aligned depends on a particular kernel,
+            # so try different offsets.
+            for i in (-4, -8, -12, -16):
+                num_syms, = struct.unpack(
+                    num_syms_fmt, rodata[offset + i:offset + i + 4])
+                if name_counts[-1] == num_syms:
+                    num_syms_offset = offset + i
+                    break
+                if num_syms != 0:
+                    break
+            if num_syms_offset is not None:
                 break
         else:
             # The current name entry is not valid. This is allowed if we are

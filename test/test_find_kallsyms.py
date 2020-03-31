@@ -50,6 +50,13 @@ class TestFindKallsyms(unittest.TestCase):
         self.assertEquals('Afixed_percpu_data', addresses_and_names[0][1])
         self.assertEquals('T__init_scratch_end', addresses_and_names[-1][1])
 
+    def test_kallsyms_4_4_0_arm(self):
+        addresses_and_names = list(find_kallsyms_in_rodata(
+            self._read('kallsyms-4.4.0-1085-raspi2.arm.gz')))
+        self.assertEqual(78413, len(addresses_and_names))
+        self.assertEquals('Tstext', addresses_and_names[0][1])
+        self.assertEquals('B__bss_stop', addresses_and_names[-1][1])
+
 
 if __name__ == '__main__':
     unittest.main()
