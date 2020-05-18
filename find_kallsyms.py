@@ -208,8 +208,8 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
 
 
 def get_addresses(rodata, endianness, num_syms_offset, num_syms):
-    # This function supports only KALLSYMS_BASE_RELATIVE: kallsyms_offsets
-    # followed by kallsyms_relative_base.
+    # Try KALLSYMS_BASE_RELATIVE: kallsyms_offsets followed by
+    # kallsyms_relative_base.
     address_fmt = endianness + 'i'
     kallsyms_relative_base, = struct.unpack(
         endianness + 'Q', rodata[num_syms_offset - 8:num_syms_offset])
@@ -235,12 +235,33 @@ def get_addresses(rodata, endianness, num_syms_offset, num_syms):
         addresses.append(address)
     else:
         return addresses_offset, addresses
-    # Assume !KALLSYMS_ABSOLUTE_PERCPU.
-    addresses = [
-        kallsyms_relative_base + raw & 0xffffffff
-        for raw in raw_addresses
-    ]
-    return addresses_offset, addresses
+    # Try !KALLSYMS_ABSOLUTE_PERCPU.
+    addresses = []
+    for raw in raw_addresses:
+        address = kallsyms_relative_base + (raw & 0xffffffff)
+        if len(addresses) > 0 and address < addresses[-1]:
+            # The resulting addresses are not sorted.
+            break
+        addresses.append(address)
+    else:
+        return addresses_offset, addresses
+    # Try !KALLSYMS_BASE_RELATIVE.
+    address_fmt = endianness + 'Q'
+    addresses_offset = num_syms_offset - num_syms * 8
+    if addresses_offset % 8 != 0:
+        addresses_offset -= 4
+    offset = addresses_offset
+    addresses = []
+    for _ in range(num_syms):
+        address, = struct.unpack(address_fmt, rodata[offset:offset + 8])
+        if len(addresses) > 0 and address < addresses[-1]:
+            # The resulting addresses are not sorted.
+            break
+        addresses.append(address)
+        offset += 8
+    else:
+        return addresses_offset, addresses
+    raise Exception('Unsupported address array format')
 
 
 def find_kallsyms_in_rodata(rodata):

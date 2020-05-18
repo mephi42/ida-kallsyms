@@ -26,9 +26,17 @@ class TestFindKallsyms(unittest.TestCase):
         addresses_and_names = list(find_kallsyms_in_rodata(
             self._read('kallsyms-3.10.0-862.11.6.el7.x86_64.gz')))
         self.assertEqual(82619, len(addresses_and_names))
+        self.assertEquals((0, 'Airq_stack_union'), addresses_and_names[0])
+        dump_stack_address, = [
+            address
+            for address, name in addresses_and_names
+            if name == 'Tdump_stack'
+        ]
+        self.assertEqual(0xffffffff817135bb, dump_stack_address)
         self.assertEquals(
-            (0x4161de0, 'Airq_stack_union'), addresses_and_names[0])
-        self.assertEquals((0x4cae000, 'B__brk_limit'), addresses_and_names[-1])
+            (0xffffffff82657000, 'B__brk_limit'),
+            addresses_and_names[-1],
+        )
 
     def test_kallsyms_5_1_9_x86_64(self):
         addresses_and_names = list(find_kallsyms_in_rodata(
