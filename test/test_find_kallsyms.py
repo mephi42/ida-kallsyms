@@ -13,7 +13,7 @@ class TestFindKallsyms(unittest.TestCase):
 
     def _read(self, name):
         with gzip.GzipFile(os.path.join(self.basedir, name)) as fp:
-            return bytearray(fp.read())
+            return fp.read()
 
     def test_kallsyms_4_16_3_s390x(self):
         addresses_and_names = list(find_kallsyms_in_rodata(

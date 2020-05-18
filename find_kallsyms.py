@@ -49,7 +49,7 @@ def try_parse_token_table(rodata, token_index, start_offset, end_offset):
         token = rodata[token_start_offset:token_end_offset]
         if b'\x00' in token[:-1]:
             return None  # Tokens must be printable.
-        if token[-1] != 0:
+        if token[-1:] != b'\x00':
             return None  # Tokens must be null-terminated.
         if token[:-1] in tokens:
             return None  # Tokens must not repeat
@@ -117,7 +117,7 @@ def find_markers(rodata, endianness, token_table_offset):
 
 
 def is_name_ok(rodata, token_lengths, offset):
-    n_tokens = rodata[offset]
+    n_tokens = ord(rodata[offset:offset + 1])
     if n_tokens == 0 or n_tokens >= 128:
         # Tokens are at least one byte long. Names must not be empty, and they
         # must be at most 127 characters long.
@@ -127,7 +127,7 @@ def is_name_ok(rodata, token_lengths, offset):
     for _ in range(n_tokens):
         # The caller is expected to have verified that the name entry does not
         # span past the end of kallsyms_names, so just fetch the next token.
-        name_length += token_lengths[rodata[offset]]
+        name_length += token_lengths[ord(rodata[offset:offset + 1])]
         if name_length >= 128:
             # Name is longer than 127 characters.
             return False
@@ -137,11 +137,11 @@ def is_name_ok(rodata, token_lengths, offset):
 
 def extract_name(rodata, token_table, offset):
     # Name must have already been checked, just expand tokens.
-    n_tokens = rodata[offset]
+    n_tokens = ord(rodata[offset:offset + 1])
     name = b''
     for _ in range(n_tokens):
         offset += 1
-        name += token_table[rodata[offset]]
+        name += token_table[ord(rodata[offset:offset + 1])]
     return name
 
 
@@ -161,10 +161,11 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
     offset = markers_offset
     while offset >= 9:
         offset -= 1
-        if rodata[offset] != 0:
+        current_byte = ord(rodata[offset:offset + 1])
+        if current_byte != 0:
             # Trailing zeroes have ended.
             trailing_zeroes = False
-        next_name_offset = offset + rodata[offset] + 1
+        next_name_offset = offset + current_byte + 1
         if next_name_offset >= markers_offset:
             # The current name entry spans past the end of kallsyms_names. This
             # is allowed if we are still looking at trailing zeroes.
@@ -204,7 +205,7 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
     names = []
     for _ in range(name_counts[-1]):
         names.append(extract_name(rodata, token_table, offset).decode())
-        offset += rodata[offset] + 1
+        offset += ord(rodata[offset:offset + 1]) + 1
     yield num_syms_offset, names
 
 
@@ -354,6 +355,6 @@ if __name__ == '__main__':
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
     with open(args.path, 'rb') as fp:
-        rodata = bytearray(fp.read())
+        rodata = fp.read()
     for address, name in find_kallsyms_in_rodata(rodata):
         print('{:016X} {}'.format(address, name))
