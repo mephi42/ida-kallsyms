@@ -70,6 +70,14 @@ class TestFindKallsyms(unittest.TestCase):
         self.assertEquals((0x80008000, 'Tstext'), addresses_and_names[0])
         self.assertEquals((0x80f56454, 'B__bss_stop'), addresses_and_names[-1])
 
+    def test_kallsyms_4_4_223_i686(self):
+        addresses_and_names = list(find_kallsyms_in_rodata(
+            self._read('kallsyms-4.4.223.defcon2020.ooofs.i686.gz')))
+        self.assertEqual(80397, len(addresses_and_names))
+        self.assertEquals((0xc1000000, 'Tstartup_32'), addresses_and_names[0])
+        self.assertEquals(
+            (0xc1e9B000, 'B__brk_limit'), addresses_and_names[-1])
+
 
 if __name__ == '__main__':
     unittest.main()

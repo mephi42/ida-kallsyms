@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+import argparse
+from collections import namedtuple
 import logging
 import struct
-import sys
 
 
 def try_parse_token_index(rodata, endianness, offset):
@@ -80,9 +81,9 @@ def find_token_tables(rodata, token_index, token_index_offset):
 def find_markers(rodata, endianness, token_table_offset):
     # In 4.20 the size of markers was reduced to 4 bytes.
     for marker_fmt, marker_size in (
-                (endianness + 'I', 4),
-                (endianness + 'Q', 8),
-            ):
+            (endianness + 'I', 4),
+            (endianness + 'Q', 8),
+    ):
         first = True
         marker_offset = token_table_offset - marker_size
         markers = []
@@ -207,21 +208,65 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
     yield num_syms_offset, names
 
 
-def get_addresses(rodata, endianness, num_syms_offset, num_syms):
-    # Try KALLSYMS_BASE_RELATIVE: kallsyms_offsets followed by
-    # kallsyms_relative_base.
-    address_fmt = endianness + 'i'
-    kallsyms_relative_base, = struct.unpack(
-        endianness + 'Q', rodata[num_syms_offset - 8:num_syms_offset])
-    addresses_offset = num_syms_offset - 8 - num_syms * 4
-    if addresses_offset % 8 != 0:
+Word = namedtuple('Word', ('size', 'fmt', 'ctype'))
+WORD32 = Word(4, 'I', 'u32')
+WORD64 = Word(8, 'Q', 'u64')
+
+
+def find_addresses_no_kallsyms_base_relative(
+        rodata, endianness, num_syms_offset, num_syms, word):
+    address_fmt = endianness + word.fmt
+    addresses_offset = num_syms_offset - num_syms * word.size
+    if word.size == 8 and addresses_offset % 8 != 0:
         addresses_offset -= 4
     offset = addresses_offset
+    addresses = []
+    for _ in range(num_syms):
+        address, = struct.unpack(
+            address_fmt, rodata[offset:offset + word.size])
+        if len(addresses) > 0 and address < addresses[-1]:
+            # The resulting addresses are not sorted.
+            return
+        addresses.append(address)
+        offset += word.size
+    logging.debug(
+        '0x%08X: %s kallsyms_addresses[]',
+        addresses_offset,
+        word.ctype,
+    )
+    yield addresses_offset, addresses
+
+
+def find_addresses_kallsyms_base_relative(
+        rodata, endianness, num_syms_offset, num_syms, word):
+    address_fmt = endianness + 'i'
+    kallsyms_relative_base_offset = num_syms_offset - word.size
+    kallsyms_relative_base, = struct.unpack(
+        endianness + word.fmt,
+        rodata[kallsyms_relative_base_offset:num_syms_offset],
+    )
+    addresses_offset = kallsyms_relative_base_offset - num_syms * 4
+    if word.size == 8 and addresses_offset % 8 != 0:
+        addresses_offset -= 4
+    if addresses_offset < 0:
+        return
+    offset = addresses_offset
+
+    def log_ok():
+        logging.debug(
+            '0x%08X: %s kallsyms_relative_base=0x%016X',
+            kallsyms_relative_base_offset,
+            word.ctype,
+            kallsyms_relative_base,
+        )
+        logging.debug('0x%08X: u32 kallsyms_offsets[]', addresses_offset)
+
     raw_addresses = []
     for _ in range(num_syms):
         raw, = struct.unpack(address_fmt, rodata[offset:offset + 4])
         raw_addresses.append(raw)
         offset += 4
+
     # Try KALLSYMS_ABSOLUTE_PERCPU.
     addresses = []
     for raw in raw_addresses:
@@ -234,7 +279,9 @@ def get_addresses(rodata, endianness, num_syms_offset, num_syms):
             break
         addresses.append(address)
     else:
-        return addresses_offset, addresses
+        log_ok()
+        yield addresses_offset, addresses
+
     # Try !KALLSYMS_ABSOLUTE_PERCPU.
     addresses = []
     for raw in raw_addresses:
@@ -244,24 +291,24 @@ def get_addresses(rodata, endianness, num_syms_offset, num_syms):
             break
         addresses.append(address)
     else:
-        return addresses_offset, addresses
-    # Try !KALLSYMS_BASE_RELATIVE.
-    address_fmt = endianness + 'Q'
-    addresses_offset = num_syms_offset - num_syms * 8
-    if addresses_offset % 8 != 0:
-        addresses_offset -= 4
-    offset = addresses_offset
-    addresses = []
-    for _ in range(num_syms):
-        address, = struct.unpack(address_fmt, rodata[offset:offset + 8])
-        if len(addresses) > 0 and address < addresses[-1]:
-            # The resulting addresses are not sorted.
-            break
-        addresses.append(address)
-        offset += 8
-    else:
-        return addresses_offset, addresses
-    raise Exception('Unsupported address array format')
+        log_ok()
+        yield addresses_offset, addresses
+
+
+def find_addresses(rodata, endianness, num_syms_offset, num_syms):
+    for word in (WORD64, WORD32):
+        # Try !KALLSYMS_BASE_RELATIVE.
+        for addresses_offset, addresses in \
+                find_addresses_no_kallsyms_base_relative(
+                    rodata, endianness, num_syms_offset, num_syms, word):
+            yield addresses_offset, addresses
+        # Try KALLSYMS_BASE_RELATIVE: kallsyms_offsets followed by
+        # kallsyms_relative_base. This was introduced in 4.6 by commit
+        # 2213e9a66bb8.
+        for addresses_offset, addresses in \
+                find_addresses_kallsyms_base_relative(
+                    rodata, endianness, num_syms_offset, num_syms, word):
+            yield addresses_offset, addresses
 
 
 def find_kallsyms_in_rodata(rodata):
@@ -284,27 +331,29 @@ def find_kallsyms_in_rodata(rodata):
                         markers_offset, markers)
                     for num_syms_offset, names in find_num_syms(
                             rodata, endianness, token_table, markers_offset):
+                        num_syms = len(names)
                         logging.debug(
                             '0x%08X: kallsyms_num_syms=%s',
-                            num_syms_offset, len(names))
-                        addresses_offset, addresses = get_addresses(
-                            rodata, endianness, num_syms_offset, len(names))
-                        kallsyms_end = token_index_offset + (256 * 2)
-                        kallsyms_size = kallsyms_end - addresses_offset
-                        logging.debug(
-                            '0x%08X: kallsyms[0x%08X]',
-                            addresses_offset, kallsyms_size)
-                        return zip(addresses, names)
+                            num_syms_offset, num_syms)
+                        for addresses_offset, addresses in find_addresses(
+                                rodata, endianness, num_syms_offset, num_syms):
+                            kallsyms_end = token_index_offset + (256 * 2)
+                            kallsyms_size = kallsyms_end - addresses_offset
+                            logging.debug(
+                                '0x%08X: kallsyms[0x%08X]',
+                                addresses_offset, kallsyms_size)
+                            return zip(addresses, names)
     return []
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-    if len(sys.argv) != 2:
-        print('Usage: {} PATH'.format(sys.argv[0]))
-        sys.exit(1)
-    rodata_path, = sys.argv[1:]
-    with open(rodata_path, 'rb') as fp:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('path')
+    args = parser.parse_args()
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    with open(args.path, 'rb') as fp:
         rodata = bytearray(fp.read())
     for address, name in find_kallsyms_in_rodata(rodata):
         print('{:016X} {}'.format(address, name))
