@@ -2,6 +2,7 @@
 set -e -u -x
 cd "$(dirname "$0")"
 flake8 $(git ls-files "*.py") build-vmlinux find-kallsyms
+mypy build-vmlinux
 python2 -m nose
 python3 -m nose
 jython -m nose

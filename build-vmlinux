@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from contextlib import contextmanager
 import io
 import logging
 from multiprocessing import cpu_count
@@ -9,9 +10,10 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
-from elftools.elf.elffile import ELFFile
+from elftools.elf.elffile import ELFFile  # type: ignore
+from kconfiglib import Kconfig  # type: ignore
 
 
 def get_elf_host(header: Any) -> str:
@@ -38,6 +40,12 @@ def get_linux_arch(host: str) -> str:
         'x86_64': 'x86_64',
         'aarch64': 'arm64',
     }[host[:host.index('-')]]
+
+
+def arch2srcarch(arch: str) -> str:
+    if arch in ('i386', 'x86_64'):
+        return 'x86'
+    return arch
 
 
 def fetch_tag(git: Path, remote: str, tag: str) -> None:
@@ -120,6 +128,42 @@ def build_or_reuse_toolchain(
     return bin
 
 
+def putenv(name: str, value: Optional[str]) -> None:
+    if value is None:
+        try:
+            del os.environ[name]
+        except KeyError:
+            pass
+    else:
+        os.environ[name] = value
+
+
+@contextmanager
+def env(tmp_env: Dict[str, str]) -> Generator[None, None, None]:
+    orig_env = {
+        k: os.environ.get(k)
+        for k in tmp_env.values()
+    }
+    try:
+        os.environ.update(tmp_env)
+        yield
+    finally:
+        for k, v in orig_env.items():
+            putenv(k, v)
+
+
+def cc_version_text(exe):
+    p = subprocess.Popen(
+        [exe, '--version'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        return p.stdout.readline().decode().strip()
+    finally:
+        while p.stdout.read(8192) != b'':
+            pass
+        if p.wait() != 0:
+            raise subprocess.CalledProcessError(p.returncode, p.args)
+
+
 def build_or_reuse_vmlinux(
         git: Path,
         host: str,
@@ -128,6 +172,7 @@ def build_or_reuse_vmlinux(
         toolchain_bin: Path
 ) -> Path:
     arch = get_linux_arch(host)
+    srcarch = arch2srcarch(arch)
     vmlinux = Path(f'vmlinux-{arch}-{version}')
     if vmlinux.exists():
         return vmlinux
@@ -149,9 +194,9 @@ def build_or_reuse_vmlinux(
         ccache = ''
     else:
         ccache = 'ccache '
+    env_path = str(toolchain_bin) + os.pathsep + os.environ['PATH']
 
     def make(args: List[str]) -> None:
-        path = str(toolchain_bin) + os.pathsep + os.environ['PATH']
         args = [
                    'make',
                    f'ARCH={arch}',
@@ -159,9 +204,29 @@ def build_or_reuse_vmlinux(
                    f'-j{cpu_count()}',
                ] + args
         subprocess.check_call(
-            args, cwd=worktree, env={**os.environ, 'PATH': path})
+            args, cwd=worktree, env={**os.environ, 'PATH': env_path})
 
-    make(['defconfig'])
+    worktree_config = worktree / '.config'
+    if linux_config is None:
+        make(['defconfig'])
+        cc = f'{host}-gcc'
+        with env({
+            'srctree': str(worktree),
+            'ARCH': arch,
+            'SRCARCH': srcarch,
+            'KERNELVERSION': version,
+            'CC': cc,
+            'HOSTCC': 'gcc',
+            'HOSTCXX': 'g++',
+            'CC_VERSION_TEXT': cc_version_text(toolchain_bin / cc),
+            'PATH': env_path,
+        }):
+            kconf = Kconfig()
+            kconf.load_config(worktree_config)
+            kconf.syms['DEBUG_INFO'].set_value('y')
+            kconf.write_config(worktree_config)
+    else:
+        shutil.copyfile(linux_config, worktree_config)
     make(['vmlinux'])
     with tempfile.TemporaryDirectory(dir=vmlinux.parent) as tempdir:
         vmlinux_tmp = Path(tempdir) / 'vmlinux'
