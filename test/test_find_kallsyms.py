@@ -78,6 +78,16 @@ class TestFindKallsyms(unittest.TestCase):
         self.assertEquals(
             (0xc1e9B000, 'B__brk_limit'), addresses_and_names[-1])
 
+    def test_kallsyms_4_4_223_i686_v2(self):
+        addresses_and_names = list(find_kallsyms_in_rodata(
+            self._read('kallsyms-4.4.223.defconfig.i686.gz')))
+        self.assertEqual(39874, len(addresses_and_names))
+        self.assertEquals(
+            (0xc1000338, 'tsanitize_boot_params.constprop.0'),
+            addresses_and_names[0],
+        )
+        self.assertEquals((0xc1be29bd, 'T_einittext'), addresses_and_names[-1])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -150,10 +150,10 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
     # kallsyms_names given that we know the start of kallsyms_markers.
     num_syms_fmt = endianness + 'I'
     token_lengths = [len(token) for token in token_table]
-    # Indexed by (markers_offset - offset - 1). Each element is a number of
-    # name entries that follow the respective offset, or None if that offset is
-    # not a start of a valid name entry.
-    name_counts = []
+    # Indexed by (markers_offset - offset). Each element is a number of name
+    # entries that follow the respective offset, or None if that offset is not
+    # a start of a valid name entry.
+    name_counts = [0]
     # Whether offset still points to one of the trailing zeroes.
     trailing_zeroes = True
     offset = markers_offset
@@ -164,12 +164,12 @@ def find_num_syms(rodata, endianness, token_table, markers_offset):
             # Trailing zeroes have ended.
             trailing_zeroes = False
         next_name_offset = offset + current_byte + 1
-        if next_name_offset >= markers_offset:
+        if next_name_offset > markers_offset:
             # The current name entry spans past the end of kallsyms_names. This
             # is allowed if we are still looking at trailing zeroes.
             name_counts.append(0 if trailing_zeroes else None)
             continue
-        next_name_count = name_counts[markers_offset - next_name_offset - 1]
+        next_name_count = name_counts[markers_offset - next_name_offset]
         if next_name_count is None:
             # The next name entry is invalid, which means the current name
             # entry cannot be valid.
