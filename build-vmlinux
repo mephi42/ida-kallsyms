@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+import argparse
+import io
+import logging
+from multiprocessing import cpu_count
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+from typing import Any, List, Optional
+
+from elftools.elf.elffile import ELFFile
+
+
+def get_elf_host(header: Any) -> str:
+    return {
+        ('EM_386', 'ELFCLASS32', 'ELFDATA2LSB'): 'i686-linux-gnu',
+        ('EM_MIPS', 'ELFCLASS32', 'ELFDATA2MSB'): 'mips-linux-gnu',
+        ('EM_PPC', 'ELFCLASS32', 'ELFDATA2MSB'): 'powerpc-linux-gnu',
+        ('EM_PPC64', 'ELFCLASS64', 'ELFDATA2MSB'): 'powerpc64-linux-gnu',
+        ('EM_S390', 'ELFCLASS64', 'ELFDATA2MSB'): 's390x-linux-gnu',
+        ('EM_ARM', 'ELFCLASS32', 'ELFDATA2LSB'): 'arm-linux-gnueabi',
+        ('EM_X86_64', 'ELFCLASS64', 'ELFDATA2LSB'): 'x86_64-linux-gnu',
+        ('EM_AARCH64', 'ELFCLASS64', 'ELFDATA2LSB'): 'aarch64-linux-gnu',
+    }[header.e_machine, header.e_ident.EI_CLASS, header.e_ident.EI_DATA]
+
+
+def get_linux_arch(host: str) -> str:
+    return {
+        'i686': 'i386',
+        'mips': 'mips',
+        'powerpc': 'ppc',
+        'powerpc64': 'ppc64',
+        's390x': 's390x',
+        'arm': 'arm',
+        'x86_64': 'x86_64',
+        'aarch64': 'arm64',
+    }[host[:host.index('-')]]
+
+
+def fetch_tag(git: Path, remote: str, tag: str) -> None:
+    git.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call(['git', 'init'], cwd=git)
+    subprocess.check_call(['git', 'fetch', remote, f'{tag}:{tag}'], cwd=git)
+
+
+def prepare_worktree(worktree: Path, git: Path, remote: str, tag: str) -> None:
+    fetch_tag(git, remote, tag)
+    try:
+        shutil.rmtree(worktree)
+    except FileNotFoundError:
+        pass
+    subprocess.check_call(
+        ['git', 'worktree', 'add', '-f', '--detach', worktree, tag], cwd=git)
+
+
+def build_or_reuse_toolchain(
+        binutils_git: Path,
+        binutils_version: Optional[str],
+        gcc_git: Path,
+        gcc_version: str,
+        host: str,
+) -> Path:
+    gcc = f'{host}-gcc-{gcc_version}'
+    install = Path.cwd() / gcc
+    bin = install / 'bin'
+    if (bin / gcc).exists():
+        return bin
+    worktree = Path.cwd() / f'{gcc}-build'
+    prepare_worktree(
+        worktree=worktree,
+        git=gcc_git,
+        remote='git://gcc.gnu.org/git/gcc.git',
+        tag=f'refs/tags/releases/gcc-{gcc_version}',
+    )
+    if binutils_version is None:
+        binutils_version = '2.27'
+    binutils_tag = 'refs/tags/binutils-' + binutils_version.replace('.', '_')
+    fetch_tag(
+        git=binutils_git,
+        remote='git://sourceware.org/git/binutils-gdb.git',
+        tag=binutils_tag,
+    )
+    p = subprocess.Popen(
+        args=['git', 'archive', binutils_tag],
+        stdout=subprocess.PIPE,
+        cwd=binutils_git,
+    )
+    subprocess.check_call(
+        args=['tar', '--skip-old-files', '-x'],
+        stdin=p.stdout,
+        cwd=worktree,
+    )
+    if p.wait() != 0:
+        raise subprocess.CalledProcessError(p.returncode, p.args)
+    subprocess.check_call([
+        './configure',
+        f'--target={host}',
+        '--enable-languages=c',
+        '--disable-bootstrap',
+        '--disable-multilib',
+        '--disable-nls',
+        f'--prefix={install}',
+    ], cwd=worktree, env={**os.environ, 'CXXFLAGS': '-fpermissive'})
+
+    def make(args: List[str]) -> None:
+        args = ['make', f'-j{cpu_count()}'] + args
+        subprocess.check_call(args, cwd=worktree)
+
+    make(['all-gcc'])
+    make([
+        'install-binutils',
+        'install-gas',
+        'install-gcc',
+        'install-ld',
+    ])
+    shutil.rmtree(worktree)
+    return bin
+
+
+def build_or_reuse_vmlinux(
+        git: Path,
+        host: str,
+        version: str,
+        linux_config: Optional[Path],
+        toolchain_bin: Path
+) -> Path:
+    arch = get_linux_arch(host)
+    vmlinux = Path(f'vmlinux-{arch}-{version}')
+    if vmlinux.exists():
+        return vmlinux
+    worktree = Path.cwd() / f'{arch}-linux-{version}-build'
+    prepare_worktree(
+        worktree=worktree,
+        git=git,
+        remote='git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git',  # noqa: E501
+        tag=f'refs/tags/v{version}',
+    )
+    try:
+        subprocess.call(
+            args=['ccache', '--version'],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        ccache = ''
+    else:
+        ccache = 'ccache '
+
+    def make(args: List[str]) -> None:
+        path = str(toolchain_bin) + os.pathsep + os.environ['PATH']
+        args = [
+                   'make',
+                   f'ARCH={arch}',
+                   f'CROSS_COMPILE={ccache}{host}-',
+                   f'-j{cpu_count()}',
+               ] + args
+        subprocess.check_call(
+            args, cwd=worktree, env={**os.environ, 'PATH': path})
+
+    make(['defconfig'])
+    make(['vmlinux'])
+    with tempfile.TemporaryDirectory(dir=vmlinux.parent) as tempdir:
+        vmlinux_tmp = Path(tempdir) / 'vmlinux'
+        vmlinux_tmp.symlink_to(worktree / 'vmlinux')
+        vmlinux_tmp.rename(vmlinux)
+    return vmlinux
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description='Build Linux Kernel')
+    parser.add_argument(
+        '--like', help='Use an existing vmlinux as a template')
+    parser.add_argument(
+        '--host', help='Build for a specific architecture')
+    parser.add_argument(
+        '--binutils-git',
+        default='binutils-gdb',
+        help='Local Binutils git repo',
+    )
+    parser.add_argument(
+        '--binutils-version', help='Use a specific Binutils version')
+    parser.add_argument(
+        '--gcc-git', default='gcc', help='Local GCC git repo')
+    parser.add_argument(
+        '--gcc-version', help='Use a specific GCC version')
+    parser.add_argument(
+        '--linux-git', default='linux', help='Local Linux Kernel git repo')
+    parser.add_argument(
+        '--linux-version', help='Build a specific Linux Kernel version')
+    parser.add_argument(
+        '--linux-config', help='Use a specific Linux Kernel .config file')
+    args = parser.parse_args()
+    host: Optional[str] = args.host
+    gcc_version: Optional[str] = args.gcc_version
+    linux_version: Optional[str] = args.linux_version
+    if args.like is not None:
+        with open(args.like, 'rb') as fp:
+            vmlinux_bytes = fp.read()
+        if host is None:
+            elf = ELFFile(io.BytesIO(vmlinux_bytes))
+            host = get_elf_host(elf.header)
+            logging.info('Detected host: %s', host)
+        if gcc_version is None or linux_version is None:
+            m = re.search(
+                pattern=br'Linux version ([0-9.]+).*\(gcc version ([0-9.]+)',
+                string=vmlinux_bytes,
+                flags=re.MULTILINE,
+            )
+            if m is None:
+                raise Exception('Could not detect GCC / Linux Kernel version')
+            if gcc_version is None:
+                gcc_version = m.group(2).decode()
+                logging.info('Detected GCC version: %s', gcc_version)
+            if linux_version is None:
+                linux_version = m.group(1).decode()
+                logging.info(
+                    'Detected Linux Kernel version: %s', linux_version)
+    if host is None:
+        raise Exception('Use --like or --host to specify architecture')
+    if linux_version is None:
+        raise Exception(
+            'Use --like or --linux-version to specify a Linux Kernel version')
+    if gcc_version is None:
+        raise Exception('Use --like or --gcc-version to specify a GCC version')
+    toolchain_bin = build_or_reuse_toolchain(
+        binutils_git=Path(args.binutils_git).expanduser(),
+        binutils_version=args.binutils_version,
+        gcc_git=Path(args.gcc_git).expanduser(),
+        gcc_version=gcc_version,
+        host=host,
+    )
+    linux_config = args.linux_config
+    if linux_config is not None:
+        linux_config = Path(linux_config)
+    vmlinux = build_or_reuse_vmlinux(
+        git=Path(args.linux_git).expanduser(),
+        host=host,
+        version=linux_version,
+        linux_config=linux_config,
+        toolchain_bin=toolchain_bin,
+    )
+    logging.info('Done: %s', vmlinux)
+
+
+if __name__ == '__main__':
+    main()

@@ -21,4 +21,13 @@ IDA script for parsing kallsyms.
 ## Stand-alone usage
 
 * `git clone https://github.com/mephi42/ida-kallsyms.git`
-* `ida-kallsyms/find_kallsyms.py vmlinux >kallsyms`
+* `ida-kallsyms/find-kallsyms vmlinux >kallsyms`
+
+# build-vmlinux
+
+Script for building a Linux Kernel similar to a specified one.
+
+## Usage
+
+* `git clone https://github.com/mephi42/ida-kallsyms.git`
+* `ida-kallsyms/build-vmlinux --like vmlinux`

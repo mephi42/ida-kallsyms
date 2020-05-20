@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-import argparse
 from collections import namedtuple
 import logging
 import struct
@@ -345,16 +343,3 @@ def find_kallsyms_in_rodata(rodata):
                                 addresses_offset, kallsyms_size)
                             return zip(addresses, names)
     return []
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--verbose', action='store_true')
-    parser.add_argument('path')
-    args = parser.parse_args()
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    with open(args.path, 'rb') as fp:
-        rodata = fp.read()
-    for address, name in find_kallsyms_in_rodata(rodata):
-        print('{:016X} {}'.format(address, name))
