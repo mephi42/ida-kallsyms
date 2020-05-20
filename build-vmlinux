@@ -1,7 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env pypy3
 import argparse
 from contextlib import contextmanager
 import io
+import json
 import logging
 from multiprocessing import cpu_count
 import os
@@ -10,10 +11,12 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, NamedTuple, Optional, Tuple
 
 from elftools.elf.elffile import ELFFile  # type: ignore
 from kconfiglib import Kconfig  # type: ignore
+
+from find_kallsyms import find_kallsyms_in_rodata
 
 
 def get_elf_host(header: Any) -> str:
@@ -165,6 +168,7 @@ def cc_version_text(exe):
 
 
 def build_or_reuse_vmlinux(
+        output: Optional[Path],
         git: Path,
         host: str,
         version: str,
@@ -173,9 +177,10 @@ def build_or_reuse_vmlinux(
 ) -> Path:
     arch = get_linux_arch(host)
     srcarch = arch2srcarch(arch)
-    vmlinux = Path(f'vmlinux-{arch}-{version}')
-    if vmlinux.exists():
-        return vmlinux
+    if output is None:
+        output = Path(f'vmlinux-{arch}-{version}')
+    if output.exists():
+        return output
     worktree = Path.cwd() / f'{arch}-linux-{version}-build'
     prepare_worktree(
         worktree=worktree,
@@ -228,15 +233,80 @@ def build_or_reuse_vmlinux(
     else:
         shutil.copyfile(linux_config, worktree_config)
     make(['vmlinux'])
-    with tempfile.TemporaryDirectory(dir=vmlinux.parent) as tempdir:
+    with tempfile.TemporaryDirectory(dir=output.parent) as tempdir:
         vmlinux_tmp = Path(tempdir) / 'vmlinux'
         vmlinux_tmp.symlink_to(worktree / 'vmlinux')
-        vmlinux_tmp.rename(vmlinux)
-    return vmlinux
+        vmlinux_tmp.rename(output)
+    return output
+
+
+class Parameter(NamedTuple):
+    type: int
+    name: str
+
+
+class Subprogram(NamedTuple):
+    return_type: Optional[int]
+    name: str
+    parameters: List[Parameter]
+    has_varargs: bool
+
+
+def extract_debug_info(
+        output: Path, vmlinux: Path, kallsyms: List[str]) -> None:
+    # Mostly copied from
+    # https://github.com/mephi42/linetrace-cmd-record/blob/9769e9505cb2/linetrace-cmd-record#L179
+    # https://github.com/mephi42/linetrace-cmd-record/blob/9769e9505cb2/linetrace-cmd-record#L59
+    kallsyms_set = {kallsym[1:] for kallsym in kallsyms}
+    subprograms = {}
+    with open(vmlinux, 'rb') as fp:
+        elf = ELFFile(fp)
+        dwarf = elf.get_dwarf_info(
+            relocate_dwarf_sections=elf['e_type'] == 'ET_REL')
+        for cu in dwarf.iter_CUs():
+            for die1 in cu.get_top_DIE().iter_children():
+                if die1.tag != 'DW_TAG_subprogram':
+                    continue
+                if ('DW_AT_inline' in die1.attributes or
+                        'DW_AT_declaration' in die1.attributes):
+                    continue
+                name = die1.attributes.get('DW_AT_name')
+                if name is not None:
+                    name = name.value.decode()
+                if name is None or name not in kallsyms_set:
+                    continue
+                parameters = []
+                has_varargs = False
+                for die2 in die1.iter_children():
+                    if die2.tag == 'DW_TAG_unspecified_parameters':
+                        has_varargs = True
+                        continue
+                    if die2.tag != 'DW_TAG_formal_parameter':
+                        continue
+                    parameters.append(Parameter(
+                        type=die2.attributes['DW_AT_type'].value,
+                        name=die2.attributes['DW_AT_name'].value.decode(),
+                    ))
+                return_type = die2.attributes.get('DW_AT_type')
+                if return_type is not None:
+                    return_type = return_type.value
+                subprograms[die1.offset] = Subprogram(
+                    return_type=return_type,
+                    name=name,
+                    parameters=parameters,
+                    has_varargs=has_varargs,
+                )
+    with open(output, 'w') as output_fp:
+        json.dump({
+            'subprograms': subprograms,
+        }, output_fp, indent=4, separators=(',', ': '))
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(relativeCreated)7dms| %(message)s',
+    )
     parser = argparse.ArgumentParser(description='Build Linux Kernel')
     parser.add_argument(
         '--like', help='Use an existing vmlinux as a template')
@@ -263,6 +333,7 @@ def main():
     host: Optional[str] = args.host
     gcc_version: Optional[str] = args.gcc_version
     linux_version: Optional[str] = args.linux_version
+    kallsyms: List[Tuple[int, str]] = []
     if args.like is not None:
         with open(args.like, 'rb') as fp:
             vmlinux_bytes = fp.read()
@@ -285,6 +356,8 @@ def main():
                 linux_version = m.group(1).decode()
                 logging.info(
                     'Detected Linux Kernel version: %s', linux_version)
+        kallsyms = list(find_kallsyms_in_rodata(vmlinux_bytes))
+        logging.info('Found kallsyms: %d', len(kallsyms))
     if host is None:
         raise Exception('Use --like or --host to specify architecture')
     if linux_version is None:
@@ -302,14 +375,26 @@ def main():
     linux_config = args.linux_config
     if linux_config is not None:
         linux_config = Path(linux_config)
+    output = args.like
+    if output is not None:
+        output = Path(f'{output}.like')
     vmlinux = build_or_reuse_vmlinux(
+        output=output,
         git=Path(args.linux_git).expanduser(),
         host=host,
         version=linux_version,
         linux_config=linux_config,
         toolchain_bin=toolchain_bin,
     )
-    logging.info('Done: %s', vmlinux)
+    logging.info('Built: %s', vmlinux)
+    if args.like is not None and len(kallsyms) > 0:
+        output = Path(f'{args.like}.like.json')
+        extract_debug_info(
+            output=output,
+            vmlinux=vmlinux,
+            kallsyms=[kallsym for _, kallsym in kallsyms],
+        )
+        logging.info('Extracted: %s', output)
 
 
 if __name__ == '__main__':

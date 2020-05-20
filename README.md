@@ -25,9 +25,12 @@ IDA script for parsing kallsyms.
 
 # build-vmlinux
 
-Script for building a Linux Kernel similar to a specified one.
+Script for building and extracting additional information from a Linux Kernel
+that is similar to the one being analyzed. It produces `vmlinux.like.json`
+file, that is automatically picked up by `ghidra-kallsyms.py`.
 
 ## Usage
 
 * `git clone https://github.com/mephi42/ida-kallsyms.git`
 * `ida-kallsyms/build-vmlinux --like vmlinux`
+* Use `ghidra-kallsyms.py` as described above.
