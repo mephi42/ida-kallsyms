@@ -232,6 +232,7 @@ def build_or_reuse_vmlinux(
             kconf.write_config(worktree_config)
     else:
         shutil.copyfile(linux_config, worktree_config)
+        make(['olddefconfig'])
     make(['vmlinux'])
     with tempfile.TemporaryDirectory(dir=output.parent) as tempdir:
         vmlinux_tmp = Path(tempdir) / 'vmlinux'
@@ -374,7 +375,7 @@ def main():
     )
     linux_config = args.linux_config
     if linux_config is not None:
-        linux_config = Path(linux_config)
+        linux_config = Path(linux_config).expanduser()
     output = args.like
     if output is not None:
         output = Path(f'{output}.like')
