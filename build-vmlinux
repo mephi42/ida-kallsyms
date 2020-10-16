@@ -74,20 +74,20 @@ def build_or_reuse_toolchain(
         gcc_version: str,
         host: str,
 ) -> Path:
-    gcc = f'{host}-gcc-{gcc_version}'
-    install = Path.cwd() / gcc
+    if binutils_version is None:
+        binutils_version = '2.27'
+    toolchain = f'{host}-toolchain-{binutils_version}-{gcc_version}'
+    install = Path.cwd() / toolchain
     bin = install / 'bin'
-    if (bin / gcc).exists():
+    if bin.is_dir():
         return bin
-    worktree = Path.cwd() / f'{gcc}-build'
+    worktree = Path.cwd() / f'{toolchain}-build'
     prepare_worktree(
         worktree=worktree,
         git=gcc_git,
         remote='git://gcc.gnu.org/git/gcc.git',
         tag=f'refs/tags/releases/gcc-{gcc_version}',
     )
-    if binutils_version is None:
-        binutils_version = '2.27'
     binutils_tag = 'refs/tags/binutils-' + binutils_version.replace('.', '_')
     fetch_tag(
         git=binutils_git,
