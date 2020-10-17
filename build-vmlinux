@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from typing import Any, Dict, Generator, List, NamedTuple, Optional, Tuple
 
+from elftools.dwarf.die import DIE  # type: ignore
 from elftools.elf.elffile import ELFFile  # type: ignore
 from kconfiglib import Kconfig  # type: ignore
 
@@ -81,7 +82,7 @@ def build_or_reuse_toolchain(
     toolchain = f'{host}-toolchain-{binutils_version}-{gcc_version}'
     install = Path.cwd() / toolchain
     bin = install / 'bin'
-    if (bin / 'gcc').exists():
+    if (bin / f'{host}-gcc').exists():
         return bin
     worktree = Path.cwd() / f'{toolchain}-build'
     binutils_worktree = worktree / 'binutils-gdb'
@@ -242,6 +243,81 @@ def build_or_reuse_vmlinux(
     return output
 
 
+def convert_name(die: DIE) -> Optional[str]:
+    name = die.attributes.get('DW_AT_name')
+    if name is None:
+        return None
+    return name.value.decode()
+
+
+def convert_type(die: DIE) -> Optional[int]:
+    type = die.attributes.get('DW_AT_type')
+    if type is None:
+        return None
+    return die.cu.cu_offset + type.raw_value
+
+
+class Struct(NamedTuple):
+    kind: str
+    name: Optional[str]
+    size: int
+
+    @staticmethod
+    def convert(die: DIE) -> 'Struct':
+        return Struct(
+            kind='struct',
+            name=convert_name(die),
+            size=die.attributes['DW_AT_byte_size'].value,
+        )
+
+
+class Typedef(NamedTuple):
+    kind: str
+    name: str
+    type: int
+
+    @staticmethod
+    def convert(die: DIE) -> 'Typedef':
+        return Typedef(
+            kind='typedef',
+            name=convert_name(die),
+            type=convert_type(die),
+        )
+
+
+class Pointer(NamedTuple):
+    kind: str
+    type: int
+
+    @staticmethod
+    def convert(die: DIE) -> 'Pointer':
+        return Pointer(
+            kind='pointer',
+            type=convert_type(die),
+        )
+
+
+class Int(NamedTuple):
+    kind: str
+    is_signed: bool
+    size: int
+
+    @staticmethod
+    def convert(die: DIE) -> 'Int':
+        return Int(
+            kind='base',
+            is_signed={
+                2: False,  # boolean
+                4: False,  # float
+                5: True,  # signed
+                6: True,  # signed char
+                7: False,  # unsigned
+                8: False,  # unsigned char
+            }[die.attributes['DW_AT_encoding'].value],
+            size=die.attributes['DW_AT_byte_size'].value,
+        )
+
+
 class Parameter(NamedTuple):
     type: int
     name: str
@@ -260,6 +336,7 @@ def extract_debug_info(
     # https://github.com/mephi42/linetrace-cmd-record/blob/9769e9505cb2/linetrace-cmd-record#L179
     # https://github.com/mephi42/linetrace-cmd-record/blob/9769e9505cb2/linetrace-cmd-record#L59
     kallsyms_set = {kallsym[1:] for kallsym in kallsyms}
+    types = {}
     subprograms = {}
     with open(vmlinux, 'rb') as fp:
         elf = ELFFile(fp)
@@ -267,14 +344,31 @@ def extract_debug_info(
             relocate_dwarf_sections=elf['e_type'] == 'ET_REL')
         for cu in dwarf.iter_CUs():
             for die1 in cu.get_top_DIE().iter_children():
+                if die1.tag == 'DW_TAG_structure_type':
+                    if 'DW_AT_declaration' in die1.attributes:
+                        continue
+                    types[die1.offset] = Struct.convert(die1)
+                    continue
+                if die1.tag == 'DW_TAG_typedef':
+                    types[die1.offset] = Typedef.convert(die1)
+                    continue
+                if die1.tag == 'DW_TAG_pointer_type':
+                    types[die1.offset] = Pointer.convert(die1)
+                    continue
+                if die1.tag == 'DW_TAG_base_type':
+                    types[die1.offset] = Int.convert(die1)
+                    continue
+                if die1.tag == 'DW_TAG_enumeration_type':
+                    if 'DW_AT_declaration' in die1.attributes:
+                        continue
+                    types[die1.offset] = Int.convert(die1)
+                    continue
                 if die1.tag != 'DW_TAG_subprogram':
                     continue
                 if ('DW_AT_inline' in die1.attributes or
                         'DW_AT_declaration' in die1.attributes):
                     continue
-                name = die1.attributes.get('DW_AT_name')
-                if name is not None:
-                    name = name.value.decode()
+                name = convert_name(die1)
                 if name is None or name not in kallsyms_set:
                     continue
                 parameters = []
@@ -286,20 +380,18 @@ def extract_debug_info(
                     if die2.tag != 'DW_TAG_formal_parameter':
                         continue
                     parameters.append(Parameter(
-                        type=die2.attributes['DW_AT_type'].value,
-                        name=die2.attributes['DW_AT_name'].value.decode(),
+                        type=convert_type(die2),
+                        name=convert_name(die2),
                     ))
-                return_type = die2.attributes.get('DW_AT_type')
-                if return_type is not None:
-                    return_type = return_type.value
                 subprograms[die1.offset] = Subprogram(
-                    return_type=return_type,
+                    return_type=convert_type(die1),
                     name=name,
                     parameters=parameters,
                     has_varargs=has_varargs,
                 )
     with open(output, 'w') as output_fp:
         json.dump({
+            'types': types,
             'subprograms': subprograms,
         }, output_fp, indent=4, separators=(',', ': '))
 
