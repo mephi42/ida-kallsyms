@@ -257,17 +257,45 @@ def convert_type(die: DIE) -> Optional[int]:
     return die.cu.cu_offset + type.raw_value
 
 
+class Member(NamedTuple):
+    type: int
+    name: str
+    offset: int
+
+    @staticmethod
+    def convert(die: DIE) -> 'Member':
+        offset_attr = die.attributes.get('DW_AT_data_member_location')
+        if offset_attr is None:
+            offset = 0
+        else:
+            offset = offset_attr.value
+        return Member(
+            type=convert_type(die),
+            name=convert_name(die),
+            offset=offset,
+        )
+
+
 class Struct(NamedTuple):
     kind: str
     name: Optional[str]
     size: int
+    members: List[Member]
 
     @staticmethod
     def convert(die: DIE) -> 'Struct':
+        members = []
+        for child_die in die.iter_children():
+            if child_die.tag == 'DW_TAG_member':
+                if 'DW_AT_bit_size' in child_die.attributes or \
+                        'DW_AT_bit_offset' in child_die.attributes:
+                    continue
+                members.append(Member.convert(child_die))
         return Struct(
-            kind='struct',
+            kind='struct' if die.tag == 'DW_TAG_structure_type' else 'union',
             name=convert_name(die),
             size=die.attributes['DW_AT_byte_size'].value,
+            members=members,
         )
 
 
@@ -318,6 +346,21 @@ class Int(NamedTuple):
         )
 
 
+class Qualified(NamedTuple):
+    kind: str
+    type: int
+
+    @staticmethod
+    def convert(die: DIE) -> 'Qualified':
+        return Qualified(
+            kind={
+                'DW_TAG_const_type': 'const',
+                'DW_TAG_volatile_type': 'volatile',
+            }[die.tag],
+            type=convert_type(die),
+        )
+
+
 class Parameter(NamedTuple):
     type: int
     name: str
@@ -344,7 +387,7 @@ def extract_debug_info(
             relocate_dwarf_sections=elf['e_type'] == 'ET_REL')
         for cu in dwarf.iter_CUs():
             for die1 in cu.get_top_DIE().iter_children():
-                if die1.tag == 'DW_TAG_structure_type':
+                if die1.tag in ('DW_TAG_structure_type', 'DW_TAG_union_type'):
                     if 'DW_AT_declaration' in die1.attributes:
                         continue
                     types[die1.offset] = Struct.convert(die1)
@@ -362,6 +405,9 @@ def extract_debug_info(
                     if 'DW_AT_declaration' in die1.attributes:
                         continue
                     types[die1.offset] = Int.convert(die1)
+                    continue
+                if die1.tag in ('DW_TAG_const_type', 'DW_TAG_volatile_type'):
+                    types[die1.offset] = Qualified.convert(die1)
                     continue
                 if die1.tag != 'DW_TAG_subprogram':
                     continue

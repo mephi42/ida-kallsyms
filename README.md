@@ -6,8 +6,8 @@ IDA script for parsing kallsyms.
 
 * `git clone https://github.com/mephi42/ida-kallsyms.git`
 * Open the kernel in IDA, let the autoanalysis finish.
-* Go to `File` &#8594; `Script file...` or press Alt+F7.
-* Select `ida-kallsyms/ida-kallsyms.py` and wait.
+* From `File` &#8594; `Script file...` (Alt+F7 / Alt+F9) run
+  `ida-kallsyms/ida-kallsyms.py` script.
 
 ## Usage with Ghidra
 
@@ -21,10 +21,9 @@ IDA script for parsing kallsyms.
 ## Stand-alone usage
 
 * `git clone https://github.com/mephi42/ida-kallsyms.git`
-* `ida-kallsyms/find-kallsyms vmlinux >kallsyms`
-* The resulting `kallsyms` file can be imported into IDA by going to `File`
-  &#8594; `Script file...` or pressing Alt+F7, selecting
-  `ida-kallsyms-import.py` script and then choosing the `kallsyms` file.
+* `ida-kallsyms/find-kallsyms vmlinux >vmlinux.kallsyms`
+* The resulting `vmlinux.kallsyms` file can be imported into IDA using
+  `ida-kallsyms-import.py` script.
 
 # build-vmlinux
 
@@ -34,14 +33,14 @@ information from it.
 
 ## Usage
 
-* `git clone https://github.com/mephi42/ida-kallsyms.git`
-* `ida-kallsyms/build-vmlinux --like vmlinux`
+* Load kallsyms into IDA as described above.
+* `pypy3 ida-kallsyms/build-vmlinux --like vmlinux`
 
   This will run for a while and generate `vmlinux.like.json` file.
 
   Check out `ida-kallsyms/build-vmlinux --help` in case you already have
   `binutils-gdb` / `gcc` / `linux` local git repos or a `.config` that
   matches `vmlinux`.
-* Load kallsyms as described above.
-* Go to `File` &#8594; `Script file...` or press Alt+F7.
-* Select `ida-kallsyms/ida-like-import.py` and choose `vmlinux.like.json`.
+* Import `vmlinux.like.json` into IDA using `ida-kallsyms/ida-like-import.py`
+  script.
+* If there are import errors, check `vmlinux.like.json.log` file.
