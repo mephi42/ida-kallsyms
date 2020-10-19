@@ -34,7 +34,7 @@ information from it.
 ## Usage
 
 * Load kallsyms into IDA as described above.
-* `pypy3 ida-kallsyms/build-vmlinux --like vmlinux`
+* `ida-kallsyms/build-vmlinux --like vmlinux`
 
   This will run for a while and generate `vmlinux.like.json` file.
 

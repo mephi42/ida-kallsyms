@@ -259,18 +259,21 @@ def convert_type(die: DIE) -> Optional[int]:
 
 class Member(NamedTuple):
     type: int
-    name: str
+    name: Optional[str]
     offset: int
 
     @staticmethod
-    def convert(die: DIE) -> 'Member':
+    def convert(die: DIE) -> Optional['Member']:
         offset_attr = die.attributes.get('DW_AT_data_member_location')
         if offset_attr is None:
             offset = 0
         else:
             offset = offset_attr.value
+        type = convert_type(die)
+        if type is None:
+            return None
         return Member(
-            type=convert_type(die),
+            type=type,
             name=convert_name(die),
             offset=offset,
         )
@@ -283,14 +286,17 @@ class Struct(NamedTuple):
     members: List[Member]
 
     @staticmethod
-    def convert(die: DIE) -> 'Struct':
+    def convert(die: DIE) -> Optional['Struct']:
         members = []
         for child_die in die.iter_children():
             if child_die.tag == 'DW_TAG_member':
                 if 'DW_AT_bit_size' in child_die.attributes or \
                         'DW_AT_bit_offset' in child_die.attributes:
                     continue
-                members.append(Member.convert(child_die))
+                member = Member.convert(child_die)
+                if member is None:
+                    return None
+                members.append(member)
         return Struct(
             kind='struct' if die.tag == 'DW_TAG_structure_type' else 'union',
             name=convert_name(die),
@@ -305,20 +311,26 @@ class Typedef(NamedTuple):
     type: int
 
     @staticmethod
-    def convert(die: DIE) -> 'Typedef':
+    def convert(die: DIE) -> Optional['Typedef']:
+        name = convert_name(die)
+        if name is None:
+            return None
+        type = convert_type(die)
+        if type is None:
+            return None
         return Typedef(
             kind='typedef',
-            name=convert_name(die),
-            type=convert_type(die),
+            name=name,
+            type=type,
         )
 
 
 class Pointer(NamedTuple):
     kind: str
-    type: int
+    type: Optional[int]
 
     @staticmethod
-    def convert(die: DIE) -> 'Pointer':
+    def convert(die: DIE) -> Optional['Pointer']:
         return Pointer(
             kind='pointer',
             type=convert_type(die),
@@ -351,19 +363,66 @@ class Qualified(NamedTuple):
     type: int
 
     @staticmethod
-    def convert(die: DIE) -> 'Qualified':
+    def convert(die: DIE) -> Optional['Qualified']:
+        type = convert_type(die)
+        if type is None:
+            return None
         return Qualified(
             kind={
                 'DW_TAG_const_type': 'const',
                 'DW_TAG_volatile_type': 'volatile',
             }[die.tag],
-            type=convert_type(die),
+            type=type,
+        )
+
+
+class Array(NamedTuple):
+    kind: str
+    type: int
+    size: int
+
+    @staticmethod
+    def convert(die: DIE) -> Optional['Array']:
+        type = convert_type(die)
+        if type is None:
+            return None
+        size = None
+        for child_die in die.iter_children():
+            if child_die.tag != 'DW_TAG_subrange_type':
+                return None
+            if size is not None:
+                return None
+            if 'DW_AT_lower_bound' in child_die.attributes:
+                return None
+            upper_bound = child_die.attributes.get('DW_AT_upper_bound')
+            if upper_bound is None:
+                return None
+            size = upper_bound.value
+        if size is None:
+            return None
+        return Array(
+            kind='array',
+            type=type,
+            size=size,
         )
 
 
 class Parameter(NamedTuple):
     type: int
     name: str
+
+    @staticmethod
+    def convert(die: DIE) -> Optional['Parameter']:
+        type = convert_type(die)
+        if type is None:
+            return None
+        name = convert_name(die)
+        if name is None:
+            return None
+        return Parameter(
+            type=type,
+            name=name,
+        )
 
 
 class Subprogram(NamedTuple):
@@ -372,69 +431,85 @@ class Subprogram(NamedTuple):
     parameters: List[Parameter]
     has_varargs: bool
 
+    @staticmethod
+    def convert(die: DIE, name) -> Optional['Subprogram']:
+        return_type = convert_type(die)
+        if return_type is None:
+            return None
+        parameters = []
+        has_varargs = False
+        for child_die in die.iter_children():
+            if child_die.tag == 'DW_TAG_unspecified_parameters':
+                has_varargs = True
+                continue
+            if child_die.tag != 'DW_TAG_formal_parameter':
+                continue
+            parameter = Parameter.convert(child_die)
+            if parameter is None:
+                return None
+            parameters.append(parameter)
+        return Subprogram(
+            return_type=return_type,
+            name=name,
+            parameters=parameters,
+            has_varargs=has_varargs,
+        )
+
 
 def extract_debug_info(
         output: Path, vmlinux: Path, kallsyms: List[str]) -> None:
     # Mostly copied from
     # https://github.com/mephi42/linetrace-cmd-record/blob/9769e9505cb2/linetrace-cmd-record#L179
     # https://github.com/mephi42/linetrace-cmd-record/blob/9769e9505cb2/linetrace-cmd-record#L59
+    logging.info('Extracting debug info...')
     kallsyms_set = {kallsym[1:] for kallsym in kallsyms}
-    types = {}
-    subprograms = {}
+    types: Dict[int, Any] = {}
+    subprograms: Dict[int, Subprogram] = {}
     with open(vmlinux, 'rb') as fp:
         elf = ELFFile(fp)
         dwarf = elf.get_dwarf_info(
             relocate_dwarf_sections=elf['e_type'] == 'ET_REL')
         for cu in dwarf.iter_CUs():
-            for die1 in cu.get_top_DIE().iter_children():
-                if die1.tag in ('DW_TAG_structure_type', 'DW_TAG_union_type'):
-                    if 'DW_AT_declaration' in die1.attributes:
+            for die in cu.get_top_DIE().iter_children():
+                if die.tag in ('DW_TAG_structure_type', 'DW_TAG_union_type'):
+                    if 'DW_AT_declaration' in die.attributes:
                         continue
-                    types[die1.offset] = Struct.convert(die1)
-                    continue
-                if die1.tag == 'DW_TAG_typedef':
-                    types[die1.offset] = Typedef.convert(die1)
-                    continue
-                if die1.tag == 'DW_TAG_pointer_type':
-                    types[die1.offset] = Pointer.convert(die1)
-                    continue
-                if die1.tag == 'DW_TAG_base_type':
-                    types[die1.offset] = Int.convert(die1)
-                    continue
-                if die1.tag == 'DW_TAG_enumeration_type':
-                    if 'DW_AT_declaration' in die1.attributes:
+                    struct = Struct.convert(die)
+                    if struct is not None:
+                        types[die.offset] = struct
+                elif die.tag == 'DW_TAG_typedef':
+                    typedef = Typedef.convert(die)
+                    if typedef is not None:
+                        types[die.offset] = typedef
+                elif die.tag == 'DW_TAG_pointer_type':
+                    pointer = Pointer.convert(die)
+                    if pointer is not None:
+                        types[die.offset] = pointer
+                elif die.tag == 'DW_TAG_base_type':
+                    types[die.offset] = Int.convert(die)
+                elif die.tag == 'DW_TAG_enumeration_type':
+                    if 'DW_AT_declaration' in die.attributes:
                         continue
-                    types[die1.offset] = Int.convert(die1)
-                    continue
-                if die1.tag in ('DW_TAG_const_type', 'DW_TAG_volatile_type'):
-                    types[die1.offset] = Qualified.convert(die1)
-                    continue
-                if die1.tag != 'DW_TAG_subprogram':
-                    continue
-                if ('DW_AT_inline' in die1.attributes or
-                        'DW_AT_declaration' in die1.attributes):
-                    continue
-                name = convert_name(die1)
-                if name is None or name not in kallsyms_set:
-                    continue
-                parameters = []
-                has_varargs = False
-                for die2 in die1.iter_children():
-                    if die2.tag == 'DW_TAG_unspecified_parameters':
-                        has_varargs = True
+                    types[die.offset] = Int.convert(die)
+                elif die.tag in ('DW_TAG_const_type', 'DW_TAG_volatile_type'):
+                    qualified = Qualified.convert(die)
+                    if qualified is not None:
+                        types[die.offset] = qualified
+                elif die.tag == 'DW_TAG_array_type':
+                    array = Array.convert(die)
+                    if array is not None:
+                        types[die.offset] = Array.convert(die)
+                elif die.tag == 'DW_TAG_subprogram':
+                    if ('DW_AT_inline' in die.attributes or
+                            'DW_AT_declaration' in die.attributes):
                         continue
-                    if die2.tag != 'DW_TAG_formal_parameter':
+                    name = convert_name(die)
+                    if name is None or name not in kallsyms_set:
                         continue
-                    parameters.append(Parameter(
-                        type=convert_type(die2),
-                        name=convert_name(die2),
-                    ))
-                subprograms[die1.offset] = Subprogram(
-                    return_type=convert_type(die1),
-                    name=name,
-                    parameters=parameters,
-                    has_varargs=has_varargs,
-                )
+                    subprogram = Subprogram.convert(die, name)
+                    if subprogram is not None:
+                        subprograms[die.offset] = subprogram
+    logging.info('Saving extracted debug info...')
     with open(output, 'w') as output_fp:
         json.dump({
             'types': types,

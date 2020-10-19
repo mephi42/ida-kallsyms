@@ -2,11 +2,11 @@ import json
 
 from idc import add_struc, add_struc_member, apply_type, del_struc_member, \
     parse_decl
-from ida_bytes import del_items, FF_BYTE, FF_DATA, FF_DWRD, FF_OWRD, FF_QWRD, \
-    FF_STRUCT, FF_WORD
+from ida_bytes import del_items, FF_BYTE, FF_DATA
 from ida_name import get_name_ea, is_uname, set_name
 from ida_struct import get_struc_id
 from idaapi import BADADDR, get_inf_structure
+from idautils import StructMembers
 
 
 def parse_kallsyms(fp):
@@ -41,53 +41,10 @@ DEFAULT_TYPE_ID = -1
 INFO = get_inf_structure()
 if INFO.is_64bit():
     PTR_SIZE = 8
-    FF_PTR = FF_QWRD
 elif INFO.is_32bit():
     PTR_SIZE = 4
-    FF_PTR = FF_DWRD
 else:
     PTR_SIZE = 2
-    FF_PTR = FF_WORD
-
-
-def get_flags(like, die_offset):
-    type = like['types'].get(str(die_offset))
-    if type is None:
-        return DEFAULT_TYPE_FLAGS
-    kind = type[0]
-    if kind in ('struct', 'union'):
-        return FF_DATA | FF_STRUCT
-    if kind == 'typedef':
-        return get_flags(like, type[2])
-    if kind == 'pointer':
-        return FF_DATA | FF_PTR
-    if kind == 'base':
-        return {
-            1: FF_BYTE,
-            2: FF_WORD,
-            4: FF_DWRD,
-            8: FF_QWRD,
-            16: FF_OWRD,
-        }[type[2]]
-    if kind in ('const', 'volatile'):
-        return get_flags(like, type[1])
-    return DEFAULT_TYPE_SIZE
-
-
-def get_type_id(like, die_offset):
-    type = like['types'].get(str(die_offset))
-    if type is None:
-        return DEFAULT_TYPE_ID
-    kind = type[0]
-    if kind in ('struct', 'union'):
-        if len(type) != 5:
-            return DEFAULT_TYPE_ID
-        return type[4]
-    if kind == 'typedef':
-        return get_type_id(like, type[2])
-    if kind in ('const', 'volatile'):
-        return get_type_id(like, type[1])
-    return DEFAULT_TYPE_SIZE
 
 
 def get_type_size(like, die_offset):
@@ -105,7 +62,27 @@ def get_type_size(like, die_offset):
         return type[2]
     if kind in ('const', 'volatile'):
         return get_type_size(like, type[1])
+    if kind == 'array':
+        return get_type_size(like, type[1]) * type[2]
     return DEFAULT_TYPE_SIZE
+
+
+def add_end_member(struct_id, struct_name, struct_size, log_fp):
+    """Forces struct size by creating a byte field at the end"""
+    end_member_name = 'field_{:X}'.format(struct_size - 1)
+    log_fp.write('{}.{}: ...\n'.format(struct_name, end_member_name))
+    log_fp.flush()
+    ret = add_struc_member(
+        struct_id,
+        end_member_name,
+        struct_size - 1,
+        DEFAULT_TYPE_FLAGS,
+        DEFAULT_TYPE_ID,
+        DEFAULT_TYPE_SIZE,
+    )
+    log_fp.write('... ret={}\n'.format(ret))
+    log_fp.flush()
+    return ret
 
 
 def resolve_type(like, die_offset, log_fp, alias=None):
@@ -140,44 +117,43 @@ def resolve_type(like, die_offset, log_fp, alias=None):
         if struct_id == BADADDR:
             return DEFAULT_TYPE
         type.append(struct_id)
-        end_member_name = 'field_{:X}'.format(type[2] - 1)
-        log_fp.write('{}.{}: ...\n'.format(struct_name, end_member_name))
-        log_fp.flush()
-        ret = add_struc_member(
-            struct_id,
-            end_member_name,
-            type[2] - 1,
-            DEFAULT_TYPE_FLAGS,
-            DEFAULT_TYPE_ID,
-            DEFAULT_TYPE_SIZE,
-        )
-        log_fp.write('... = {}\n'.format(ret))
-        log_fp.flush()
+        if kind == 'struct' and type[2] != 0:
+            ret = add_end_member(struct_id, struct_name, type[2], log_fp)
+            have_end_member = ret == 0
+        else:
+            have_end_member = False
         for member_type_die_offset, member_name, member_offset in type[3]:
             if member_name is None:
-                member_name = 'field_{:X}'.format(member_offset)
+                if kind == 'struct':
+                    field_n = member_offset
+                else:
+                    field_n = sum(1 for _ in StructMembers(struct_id))
+                member_name = 'field_{:X}'.format(field_n)
             elif not _is_uname(str(member_name)):
                 member_name = '_' + member_name
-            member_type_str = resolve_type(
-                like, member_type_die_offset, log_fp)
-            member_flags = get_flags(like, member_type_die_offset)
-            member_type_id = get_type_id(like, member_type_die_offset)
+            member_type_str = str(resolve_type(
+                like, member_type_die_offset, log_fp))
             member_size = get_type_size(like, member_type_die_offset)
-            if member_offset + member_size == type[2]:
+            if have_end_member and member_offset + member_size == type[2]:
                 del_struc_member(struct_id, type[2] - 1)
-            log_fp.write('{} {}.{} (size={}): ...\n'.format(
-                member_type_str, struct_name, member_name, member_size))
+                have_end_member = False
+            log_fp.write('{} {}.{}: ...\n'.format(
+                member_type_str, struct_name, member_name))
             log_fp.flush()
             ret = add_struc_member(
                 struct_id,
                 str(member_name),
                 member_offset,
-                member_flags,
-                member_type_id,
-                member_size,
+                DEFAULT_TYPE_FLAGS,
+                DEFAULT_TYPE_ID,
+                DEFAULT_TYPE_SIZE,
             )
             log_fp.write('... ret={}\n'.format(ret))
             log_fp.flush()
+            if ret == 0:
+                member_id = get_name_ea(
+                    BADADDR, '{}.{}'.format(struct_name, member_name))
+                apply_type(member_id, parse_decl(member_type_str, 0))
         return struct_name
     if kind == 'typedef':
         return resolve_type(like, type[2], log_fp, type[1])
@@ -190,6 +166,8 @@ def resolve_type(like, die_offset, log_fp, alias=None):
             return 'unsigned __int' + str(type[2] * 8)
     if kind in ('const', 'volatile'):
         return resolve_type(like, type[1], log_fp)
+    if kind == 'array':
+        return '{}[{}]'.format(resolve_type(like, type[1], log_fp), type[2])
     return DEFAULT_TYPE
 
 
