@@ -1,0 +1,2 @@
+kconfiglib
+pyelftools

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from typing import Any, Dict, Generator, List, NamedTuple, Optional, Set, Tuple
@@ -31,6 +32,15 @@ def get_elf_host(header: Any) -> str:
         ('EM_X86_64', 'ELFCLASS64', 'ELFDATA2LSB'): 'x86_64-linux-gnu',
         ('EM_AARCH64', 'ELFCLASS64', 'ELFDATA2LSB'): 'aarch64-linux-gnu',
     }[header.e_machine, header.e_ident.EI_CLASS, header.e_ident.EI_DATA]
+
+
+def get_pe_host(machine: int) -> str:
+    return {
+        0x14c: 'i686-linux-gnu',
+        0x1c0: 'arm-linux-gnueabi',
+        0x8664: 'x86_64-linux-gnu',
+        0xaa64: 'aarch64-linux-gnu',
+    }[machine]
 
 
 def get_linux_arch(host: str) -> str:
@@ -505,6 +515,17 @@ def extract_debug_info(
         json.dump(items, output_fp, indent=4, separators=(',', ': '))
 
 
+def detect_host(vmlinux_bytes: bytes) -> str:
+    if vmlinux_bytes[:2] == b'MZ':
+        pe_offset, = struct.unpack('<I', vmlinux_bytes[0x3c:0x40])
+        if vmlinux_bytes[pe_offset:pe_offset + 4] == b'PE\0\0':
+            machine, = struct.unpack(
+                '<H', vmlinux_bytes[pe_offset + 4:pe_offset + 6])
+            return get_pe_host(machine)
+    elf = ELFFile(io.BytesIO(vmlinux_bytes))
+    return get_elf_host(elf.header)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -541,8 +562,7 @@ def main():
         with open(args.like, 'rb') as fp:
             vmlinux_bytes = fp.read()
         if host is None:
-            elf = ELFFile(io.BytesIO(vmlinux_bytes))
-            host = get_elf_host(elf.header)
+            host = detect_host(vmlinux_bytes)
             logging.info('Detected host: %s', host)
         if gcc_version is None or linux_version is None:
             m = re.search(
