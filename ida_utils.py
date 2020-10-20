@@ -48,7 +48,7 @@ else:
 
 
 def get_type_size(like, die_offset):
-    type = like['types'].get(str(die_offset))
+    type = like.get(str(die_offset))
     if type is None:
         return DEFAULT_TYPE_SIZE
     kind = type[0]
@@ -88,7 +88,7 @@ def add_end_member(struct_id, struct_name, struct_size, log_fp):
 def resolve_type(like, die_offset, log_fp, alias=None):
     if die_offset is None:
         return 'void'
-    type = like['types'].get(str(die_offset))
+    type = like.get(str(die_offset))
     if type is None:
         return DEFAULT_TYPE
     kind = type[0]
@@ -175,8 +175,10 @@ def apply_like(path):
     with open('{}.log'.format(path), 'w') as log_fp:
         with open(path) as fp:
             like = json.load(fp)
-        for return_type, name, parameters, has_varargs in \
-                like['subprograms'].values():
+        for item in like.values():
+            if item[0] != 'subprogram':
+                continue
+            _, return_type, name, parameters, has_varargs = item
             address = get_name_ea(BADADDR, str(name))
             if address == BADADDR:
                 log_fp.write('Subprogram not found: {}\n'.format(name))
