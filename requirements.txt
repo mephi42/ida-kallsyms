@@ -1,2 +1,3 @@
 kconfiglib
+nose
 pyelftools

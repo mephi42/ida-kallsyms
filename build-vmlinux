@@ -185,7 +185,8 @@ def build_or_reuse_vmlinux(
         host: str,
         version: str,
         linux_config: Optional[Path],
-        toolchain_bin: Path
+        toolchain_bin: Path,
+        template_vmlinux: Optional[Path],
 ) -> Path:
     arch = get_linux_arch(host)
     srcarch = arch2srcarch(arch)
@@ -225,7 +226,22 @@ def build_or_reuse_vmlinux(
 
     worktree_config = worktree / '.config'
     if linux_config is None:
-        make(['defconfig'])
+        if template_vmlinux is None:
+            need_defconfig = True
+        else:
+            with open(worktree_config, 'wb') as fp:
+                returncode = subprocess.call([
+                    worktree / 'scripts' / 'extract-ikconfig',
+                    template_vmlinux,
+                ], stdout=fp)
+            if returncode == 0:
+                logging.info('Extracted: %s', worktree_config)
+                make(['olddefconfig'])
+                need_defconfig = False
+            else:
+                need_defconfig = True
+        if need_defconfig:
+            make(['defconfig'])
         cc = f'{host}-gcc'
         with env({
             'srctree': str(worktree),
@@ -558,7 +574,10 @@ def main():
     gcc_version: Optional[str] = args.gcc_version
     linux_version: Optional[str] = args.linux_version
     kallsyms: List[Tuple[int, str]] = []
-    if args.like is not None:
+    if args.like is None:
+        template_vmlinux = None
+    else:
+        template_vmlinux = Path(args.like)
         with open(args.like, 'rb') as fp:
             vmlinux_bytes = fp.read()
         if host is None:
@@ -577,6 +596,8 @@ def main():
                 logging.info('Detected GCC version: %s', gcc_version)
             if linux_version is None:
                 linux_version = m.group(1).decode()
+                if linux_version.endswith('.0'):
+                    linux_version = linux_version[:-2]
                 logging.info(
                     'Detected Linux Kernel version: %s', linux_version)
         kallsyms = list(find_kallsyms_in_rodata(vmlinux_bytes))
@@ -608,6 +629,7 @@ def main():
         version=linux_version,
         linux_config=linux_config,
         toolchain_bin=toolchain_bin,
+        template_vmlinux=template_vmlinux,
     )
     logging.info('Built: %s', vmlinux)
     if args.like is not None and len(kallsyms) > 0:
