@@ -241,6 +241,7 @@ def build_or_reuse_vmlinux(
         if need_defconfig:
             make(['defconfig'])
         cc = f'{host}-gcc'
+        ld = f'{host}-ld'
         with env({
             'srctree': str(worktree),
             'ARCH': arch,
@@ -251,6 +252,7 @@ def build_or_reuse_vmlinux(
             'HOSTCXX': 'g++',
             'CC_VERSION_TEXT': cc_version_text(toolchain_bin / cc),
             'PATH': env_path,
+            'LD': ld,
         }):
             kconf = Kconfig()
             kconf.load_config(worktree_config)
