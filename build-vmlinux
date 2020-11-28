@@ -82,13 +82,11 @@ def prepare_worktree(worktree: Path, git: Path, remote: str, tag: str) -> None:
 
 def build_or_reuse_toolchain(
         binutils_git: Path,
-        binutils_version: Optional[str],
+        binutils_version: str,
         gcc_git: Path,
         gcc_version: str,
         host: str,
 ) -> Path:
-    if binutils_version is None:
-        binutils_version = '2.27'
     toolchain = f'{host}-toolchain-{binutils_version}-{gcc_version}'
     install = Path.cwd() / toolchain
     bin = install / 'bin'
@@ -573,6 +571,7 @@ def main():
     host: Optional[str] = args.host
     gcc_version: Optional[str] = args.gcc_version
     linux_version: Optional[str] = args.linux_version
+    binutils_version: Optional[str] = args.binutils_version
     kallsyms: List[Tuple[int, str]] = []
     if args.like is None:
         template_vmlinux = None
@@ -583,23 +582,47 @@ def main():
         if host is None:
             host = detect_host(vmlinux_bytes)
             logging.info('Detected host: %s', host)
-        if gcc_version is None or linux_version is None:
-            m = re.search(
-                pattern=br'Linux version ([0-9.]+).*\(gcc version ([0-9.]+)',
+        if linux_version is None:
+            m_linux = re.search(
+                pattern=br'Linux version ([0-9.]+)',
                 string=vmlinux_bytes,
                 flags=re.MULTILINE,
             )
-            if m is None:
-                raise Exception('Could not detect GCC / Linux Kernel version')
-            if gcc_version is None:
-                gcc_version = m.group(2).decode()
-                logging.info('Detected GCC version: %s', gcc_version)
-            if linux_version is None:
-                linux_version = m.group(1).decode()
-                if linux_version.endswith('.0'):
-                    linux_version = linux_version[:-2]
-                logging.info(
-                    'Detected Linux Kernel version: %s', linux_version)
+            if m_linux is None:
+                raise Exception('Could not detect Linux Kernel version')
+            linux_version = m_linux.group(1).decode()
+            if linux_version.endswith('.0'):
+                linux_version = linux_version[:-2]
+            logging.info(
+                'Detected Linux Kernel version: %s', linux_version)
+        if gcc_version is None:
+            m_gcc = re.search(
+                pattern=br'\(gcc version ([0-9.]+)',
+                string=vmlinux_bytes,
+                flags=re.MULTILINE,
+            )
+            if m_gcc is None:
+                m_gcc = re.search(
+                    pattern=br'\(gcc \(Ubuntu [^ ]+\) ([0-9.]+)',
+                    string=vmlinux_bytes,
+                    flags=re.MULTILINE,
+                )
+            if m_gcc is None:
+                raise Exception('Could not detect GCC version')
+            gcc_version = m_gcc.group(1).decode()
+            logging.info('Detected GCC version: %s', gcc_version)
+        if binutils_version is None:
+            m_binutils = re.search(
+                pattern=br'GNU ld \(GNU Binutils for Ubuntu\) ([0-9.]+)',
+                string=vmlinux_bytes,
+                flags=re.MULTILINE,
+            )
+            if m_binutils is None:
+                binutils_version = '2.32'
+                logging.info('Assuming binutils version: %s', binutils_version)
+            else:
+                binutils_version = m_binutils.group(1).decode()
+                logging.info('Detected binutils version: %s', binutils_version)
         kallsyms = list(find_kallsyms_in_rodata(vmlinux_bytes))
         logging.info('Found kallsyms: %d', len(kallsyms))
     if host is None:
@@ -611,7 +634,7 @@ def main():
         raise Exception('Use --like or --gcc-version to specify a GCC version')
     toolchain_bin = build_or_reuse_toolchain(
         binutils_git=Path(args.binutils_git).expanduser(),
-        binutils_version=args.binutils_version,
+        binutils_version=binutils_version,
         gcc_git=Path(args.gcc_git).expanduser(),
         gcc_version=gcc_version,
         host=host,
