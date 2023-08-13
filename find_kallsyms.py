@@ -294,20 +294,19 @@ def find_addresses_kallsyms_base_relative(
         yield addresses_offset, addresses
 
 
-def find_addresses(rodata, endianness, num_syms_offset, num_syms):
-    for word in (WORD64, WORD32):
-        # Try !KALLSYMS_BASE_RELATIVE.
-        for addresses_offset, addresses in \
-                find_addresses_no_kallsyms_base_relative(
-                    rodata, endianness, num_syms_offset, num_syms, word):
-            yield addresses_offset, addresses
-        # Try KALLSYMS_BASE_RELATIVE: kallsyms_offsets followed by
-        # kallsyms_relative_base. This was introduced in 4.6 by commit
-        # 2213e9a66bb8.
-        for addresses_offset, addresses in \
-                find_addresses_kallsyms_base_relative(
-                    rodata, endianness, num_syms_offset, num_syms, word):
-            yield addresses_offset, addresses
+def find_addresses(rodata, endianness, num_syms_offset, num_syms, word):
+    # Try !KALLSYMS_BASE_RELATIVE.
+    for addresses_offset, addresses in \
+            find_addresses_no_kallsyms_base_relative(
+                rodata, endianness, num_syms_offset, num_syms, word):
+        yield addresses_offset, addresses
+    # Try KALLSYMS_BASE_RELATIVE: kallsyms_offsets followed by
+    # kallsyms_relative_base. This was introduced in 4.6 by commit
+    # 2213e9a66bb8.
+    for addresses_offset, addresses in \
+            find_addresses_kallsyms_base_relative(
+                rodata, endianness, num_syms_offset, num_syms, word):
+        yield addresses_offset, addresses
 
 
 def find_kallsyms_in_rodata(rodata):
@@ -335,8 +334,10 @@ def find_kallsyms_in_rodata(rodata):
         for _ in (logging.debug(
             '0x%08X: kallsyms_num_syms=%s',
             num_syms_offset, len(names)),)
+        for word in (WORD64, WORD32)
+        for _ in (logging.debug('WORD%d', word.size),)
         for addresses_offset, addresses in find_addresses(
-            rodata, endianness, num_syms_offset, len(names))
+            rodata, endianness, num_syms_offset, len(names), word)
         for _ in (logging.debug(
             '0x%08X: kallsyms[0x%08X]',
             addresses_offset,
