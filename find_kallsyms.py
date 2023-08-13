@@ -311,35 +311,36 @@ def find_addresses(rodata, endianness, num_syms_offset, num_syms):
 
 
 def find_kallsyms_in_rodata(rodata):
-    for endianness in ('<', '>'):
-        logging.debug('Endianness: %s', endianness)
+    for addresses, names in [
+        (addresses, names)
+        for endianness in ('<', '>')
+        for _ in (logging.debug('Endianness: %s', endianness),)
         for token_index_offset, token_index in find_token_indices(
-                rodata, endianness):
-            logging.debug(
-                '0x%08X: kallsyms_token_index=%s',
-                token_index_offset, token_index)
-            for token_table_offset, token_table in find_token_tables(
-                    rodata, token_index, token_index_offset):
-                logging.debug(
-                    '0x%08X: kallsyms_token_table=%s',
-                    token_table_offset, token_table)
-                for markers_offset, markers in find_markers(
-                        rodata, endianness, token_table_offset):
-                    logging.debug(
-                        '0x%08X: kallsyms_markers=%s',
-                        markers_offset, markers)
-                    for num_syms_offset, names in find_num_syms(
-                            rodata, endianness, token_table, markers_offset):
-                        num_syms = len(names)
-                        logging.debug(
-                            '0x%08X: kallsyms_num_syms=%s',
-                            num_syms_offset, num_syms)
-                        for addresses_offset, addresses in find_addresses(
-                                rodata, endianness, num_syms_offset, num_syms):
-                            kallsyms_end = token_index_offset + (256 * 2)
-                            kallsyms_size = kallsyms_end - addresses_offset
-                            logging.debug(
-                                '0x%08X: kallsyms[0x%08X]',
-                                addresses_offset, kallsyms_size)
-                            return zip(addresses, names)
+            rodata, endianness)
+        for _ in (logging.debug(
+            '0x%08X: kallsyms_token_index=%s',
+            token_index_offset, token_index),)
+        for token_table_offset, token_table in find_token_tables(
+            rodata, token_index, token_index_offset)
+        for _ in (logging.debug(
+            '0x%08X: kallsyms_token_table=%s',
+            token_table_offset, token_table),)
+        for markers_offset, markers in find_markers(
+            rodata, endianness, token_table_offset)
+        for _ in (logging.debug(
+            '0x%08X: kallsyms_markers=%s',
+            markers_offset, markers),)
+        for num_syms_offset, names in find_num_syms(
+            rodata, endianness, token_table, markers_offset)
+        for _ in (logging.debug(
+            '0x%08X: kallsyms_num_syms=%s',
+            num_syms_offset, len(names)),)
+        for addresses_offset, addresses in find_addresses(
+            rodata, endianness, num_syms_offset, len(names))
+        for _ in (logging.debug(
+            '0x%08X: kallsyms[0x%08X]',
+            addresses_offset,
+            token_index_offset + (256 * 2) - addresses_offset),)
+    ]:
+        return zip(addresses, names)
     return []
