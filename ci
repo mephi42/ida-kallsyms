@@ -4,6 +4,6 @@ cd "$(dirname "$0")"
 ./black
 ./flake8
 mypy build-vmlinux
-python2 -m nose
-python3 -m nose
-jython -m nose
+python2 -m unittest discover
+python3 -m unittest discover
+jython -m unittest discover

@@ -295,21 +295,6 @@ def find_addresses_kallsyms_base_relative(
         yield addresses_offset, addresses
 
 
-def find_addresses(rodata, endianness, num_syms_offset, num_syms, word):
-    # Try !KALLSYMS_BASE_RELATIVE.
-    for addresses_offset, addresses in find_addresses_no_kallsyms_base_relative(
-        rodata, endianness, num_syms_offset, num_syms, word
-    ):
-        yield addresses_offset, addresses
-    # Try KALLSYMS_BASE_RELATIVE: kallsyms_offsets followed by
-    # kallsyms_relative_base. This was introduced in 4.6 by commit
-    # 2213e9a66bb8.
-    for addresses_offset, addresses in find_addresses_kallsyms_base_relative(
-        rodata, endianness, num_syms_offset, num_syms, word
-    ):
-        yield addresses_offset, addresses
-
-
 def find_kallsyms_in_rodata(rodata):
     for addresses, names in [
         (addresses, names)
@@ -343,9 +328,17 @@ def find_kallsyms_in_rodata(rodata):
         )
         for word in (WORD64, WORD32)
         for _ in (logging.debug("WORD%d", word.size),)
-        for addresses_offset, addresses in find_addresses(
-            rodata, endianness, num_syms_offset, len(names), word
+        # KALLSYMS_BASE_RELATIVE means that kallsyms_offsets are followed by
+        # kallsyms_relative_base. This was introduced in 4.6 by commit
+        # 2213e9a66bb8.
+        for base_relative in (False, True)
+        for _ in (
+            logging.debug("KALLSYMS_BASE_RELATIVE=%s", "y" if base_relative else "n"),
         )
+        for addresses_offset, addresses in {
+            False: find_addresses_no_kallsyms_base_relative,
+            True: find_addresses_kallsyms_base_relative,
+        }[base_relative](rodata, endianness, num_syms_offset, len(names), word)
         for _ in (
             logging.debug(
                 "0x%08X: kallsyms[0x%08X]",
