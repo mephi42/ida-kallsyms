@@ -15,7 +15,7 @@ jobs:
 
     - name: Install packages
       run: sudo apt-get update &&
-           sudo apt-get install -y black python2 python3 jython
+           sudo apt-get install -y black flake8 python2 python3 jython
 
     - name: Check formatting
       run: ./black --check
