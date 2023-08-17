@@ -1,0 +1,27 @@
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+name: Continuous integration
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install packages
+      run: sudo apt-get update &&
+           sudo apt-get install -y python2 python3 jython
+
+    - name: Test python2
+      run: python2 -m unittest discover
+
+    - name: Test python3
+      run: python2 -m unittest discover
+
+    - name: Test jython
+      run: jython -m unittest discover
