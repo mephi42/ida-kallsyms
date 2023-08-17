@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e -u -x
+cd "$(dirname "$0")"
+{
+    git ls-files -z '*.py'
+    git grep --name-only -z '^#!/usr/bin/env python3'
+    git grep --name-only -z '^#!/usr/bin/env pypy3'
+} | sort -u -z

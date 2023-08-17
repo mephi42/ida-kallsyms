@@ -4,15 +4,14 @@ import json
 
 from ghidra.app.cmd.function import CreateFunctionCmd
 from ghidra.program.model.data import VoidDataType, Undefined1DataType
-from ghidra.program.model.listing import Function, ParameterImpl, \
-    ReturnParameterImpl
+from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 from ghidra.program.model.symbol import SourceType, SymbolType
 
 from find_kallsyms import find_kallsyms_in_rodata
 
 
 def load_like_json(program, symbols, functions, types):
-    like_json_path = program.getExecutablePath() + '.like.json'
+    like_json_path = program.getExecutablePath() + ".like.json"
     try:
         fp = open(like_json_path)
     except FileNotFoundError:
@@ -21,8 +20,7 @@ def load_like_json(program, symbols, functions, types):
         like_json = json.load(fp)
     finally:
         fp.close()
-    for return_type, name, parameters, has_varargs in \
-            like_json['subprograms'].values():
+    for return_type, name, parameters, has_varargs in like_json["subprograms"].values():
         wtf = False
         existing_label = None
         existing_function = None
@@ -48,7 +46,8 @@ def load_like_json(program, symbols, functions, types):
                     name,
                     existing_label.getAddress(),
                     CreateFunctionCmd.getFunctionBody(
-                        program, existing_label.getAddress()),
+                        program, existing_label.getAddress()
+                    ),
                     SourceType.ANALYSIS,
                 )
             except:  # noqa: E722
@@ -80,16 +79,16 @@ def load_like_json(program, symbols, functions, types):
 
 program = currentProgram  # noqa: F821
 memory = program.getMemory()
-rodata_block = memory.getBlock('.rodata')
+rodata_block = memory.getBlock(".rodata")
 if rodata_block is None:
-    rodata_block = memory.getBlock('.text')
-rodata = jarray.zeros(rodata_block.getSize(), 'b')
+    rodata_block = memory.getBlock(".text")
+rodata = jarray.zeros(rodata_block.getSize(), "b")
 rodata_block.getBytes(rodata_block.getStart(), rodata)
-rodata = b''.join([chr(x & 0xff) for x in rodata])  # it's py2
+rodata = b"".join([chr(x & 0xFF) for x in rodata])  # it's py2
 ram = program.getAddressFactory().getDefaultAddressSpace()
 symbols = program.getSymbolTable()
 for address, name in find_kallsyms_in_rodata(rodata):
-    if name[0] != 'A':
+    if name[0] != "A":
         address = ram.getAddress(address)
         existing = list(symbols.getSymbols(address))
         if len(existing) == 0:
