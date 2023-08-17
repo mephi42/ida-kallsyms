@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e -u -x
+cd "$(dirname "$0")"
+./ls-py0 | xargs -0 black "$@"
