@@ -102,6 +102,21 @@ class TestFindKallsyms(unittest.TestCase):
         )
         self.assertEqual((0xC1BE29BD, "T_einittext"), addresses_and_names[-1])
 
+    def test_kallsyms_6_5_0_x86_64(self):
+        addresses_and_names = list(
+            find_kallsyms_in_rodata(
+                self._read("kallsyms-6.5.0-rc4.ctfzone2023.pwnfinity.x86_64.gz")
+            )
+        )
+        self.assertEqual(140153, len(addresses_and_names))
+        self.assertEqual(
+            (0, "Afixed_percpu_data"),
+            addresses_and_names[0],
+        )
+        self.assertEqual(
+            (0xFFFFFFFF84400000, "D__init_scratch_end"), addresses_and_names[-1]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
