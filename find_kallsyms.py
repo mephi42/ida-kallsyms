@@ -3,6 +3,14 @@ import logging
 import struct
 
 
+def align_up(p, a):
+    return p & ~(a - 1)
+
+
+def align(p, a):
+    return (p + (a - 1)) & ~(a - 1)
+
+
 def try_parse_token_index(rodata, endianness, offset):
     index_fmt = endianness + "H"
     (index,) = struct.unpack(index_fmt, rodata[offset : offset + 2])
@@ -54,24 +62,25 @@ def try_parse_token_table(rodata, token_index, start_offset, end_offset):
 
 
 def find_token_tables(rodata, token_index, token_index_offset):
-    last_token_offset = token_index_offset
-    while True:
-        # kallsyms_token_table is a sequence of 256 null-terminated strings.
-        # Find the last token by looking for a trailing \0.
-        token_table_end_offset = last_token_offset
-        last_token_offset = rodata.rfind(b"\x00", 0, last_token_offset - 1) + 1
-        if last_token_offset == 0:
-            break
-        # The last kallsyms_token_index element corresponds to the last token.
-        # Use that information to locate kallsyms_token_table.
-        token_table_offset = last_token_offset - token_index[-1]
-        if token_table_offset < 0:
-            continue
-        token_table = try_parse_token_table(
-            rodata, token_index, token_table_offset, token_table_end_offset
-        )
-        if token_table is not None:
-            yield token_table_offset, token_table
+    # kallsyms_token_table is a sequence of 256 null-terminated strings.
+    # There may be some padding at the end; skip it.
+    token_table_end_offset = token_index_offset
+    while rodata[token_table_end_offset - 2 : token_table_end_offset - 1] == b"\x00":
+        token_table_end_offset -= 1
+    # Find the last token by looking for a trailing \0.
+    last_token_offset = rodata.rfind(b"\x00", 0, token_table_end_offset - 1) + 1
+    if last_token_offset == 0:
+        return
+    # The last kallsyms_token_index element corresponds to the last token.
+    # Use that information to locate kallsyms_token_table.
+    token_table_offset = last_token_offset - token_index[-1]
+    if token_table_offset < 0:
+        return
+    token_table = try_parse_token_table(
+        rodata, token_index, token_table_offset, token_table_end_offset
+    )
+    if token_table is not None:
+        yield token_table_offset, token_table
 
 
 def find_markers(rodata, endianness, token_table_offset):
@@ -213,10 +222,11 @@ WORD64 = Word(8, "Q", "u64")
 
 
 def find_addresses_no_kallsyms_base_relative(
-    rodata, endianness, num_syms_offset, num_syms, word
+    rodata, endianness, addresses_offset, num_syms, word
 ):
+    if addresses_offset + num_syms * word.size > len(rodata):
+        return
     address_fmt = endianness + word.fmt
-    addresses_offset = num_syms_offset - num_syms * word.size
     if word.size == 8 and addresses_offset % 8 != 0:
         addresses_offset -= 4
     offset = addresses_offset
@@ -233,39 +243,35 @@ def find_addresses_no_kallsyms_base_relative(
         addresses_offset,
         word.ctype,
     )
-    yield addresses_offset, addresses
+    yield addresses_offset, offset, addresses
 
 
 def find_addresses_kallsyms_base_relative(
-    rodata, endianness, num_syms_offset, num_syms, word
+    rodata, endianness, addresses_offset, num_syms, word
 ):
-    address_fmt = endianness + "i"
-    kallsyms_relative_base_offset = num_syms_offset - word.size
-    (kallsyms_relative_base,) = struct.unpack(
-        endianness + word.fmt,
-        rodata[kallsyms_relative_base_offset:num_syms_offset],
-    )
-    addresses_offset = kallsyms_relative_base_offset - num_syms * 4
-    if word.size == 8 and addresses_offset % 8 != 0:
-        addresses_offset -= 4
     if addresses_offset < 0:
         return
-    offset = addresses_offset
+    addresses_end = addresses_offset + num_syms * 4
+    relative_base_offset = align(addresses_end, word.size)
+    relative_base_end = relative_base_offset + word.size
+    if relative_base_end > len(rodata):
+        return
+    raw_addresses = struct.unpack(
+        endianness + "i" * num_syms, rodata[addresses_offset:addresses_end]
+    )
+    (kallsyms_relative_base,) = struct.unpack(
+        endianness + word.fmt,
+        rodata[relative_base_offset:relative_base_end],
+    )
 
     def log_ok():
         logging.debug(
             "0x%08X: %s kallsyms_relative_base=0x%016X",
-            kallsyms_relative_base_offset,
+            relative_base_offset,
             word.ctype,
             kallsyms_relative_base,
         )
         logging.debug("0x%08X: u32 kallsyms_offsets[]", addresses_offset)
-
-    raw_addresses = []
-    for _ in range(num_syms):
-        (raw,) = struct.unpack(address_fmt, rodata[offset : offset + 4])
-        raw_addresses.append(raw)
-        offset += 4
 
     # Try KALLSYMS_ABSOLUTE_PERCPU.
     addresses = []
@@ -280,7 +286,7 @@ def find_addresses_kallsyms_base_relative(
         addresses.append(address)
     else:
         log_ok()
-        yield addresses_offset, addresses
+        yield addresses_offset, relative_base_end, addresses
 
     # Try !KALLSYMS_ABSOLUTE_PERCPU.
     addresses = []
@@ -292,11 +298,11 @@ def find_addresses_kallsyms_base_relative(
         addresses.append(address)
     else:
         log_ok()
-        yield addresses_offset, addresses
+        yield addresses_offset, addresses_end, addresses
 
 
 def find_kallsyms_in_rodata(rodata):
-    for addresses, names in [
+    for addresses, names in (
         (addresses, names)
         for endianness in ("<", ">")
         for _ in (logging.debug("Endianness: %s", endianness),)
@@ -335,17 +341,45 @@ def find_kallsyms_in_rodata(rodata):
         for _ in (
             logging.debug("KALLSYMS_BASE_RELATIVE=%s", "y" if base_relative else "n"),
         )
-        for addresses_offset, addresses in {
-            False: find_addresses_no_kallsyms_base_relative,
-            True: find_addresses_kallsyms_base_relative,
-        }[base_relative](rodata, endianness, num_syms_offset, len(names), word)
+        # Since kernel 6.4 (commit 404bad70fcf7) kallsyms_addresses come after
+        # kallsyms_token_index.
+        for addresses_first in (True, False)
+        for _ in (logging.debug("addresses_first=%s", addresses_first),)
+        for addresses_offset, addresses_end, addresses in (
+            find_addresses_kallsyms_base_relative(
+                rodata,
+                endianness,
+                align_up(
+                    align_up(num_syms_offset, word.size) - word.size - len(names) * 4,
+                    word.size,
+                )
+                if addresses_first
+                else align(token_index_offset + 512, word.size),
+                len(names),
+                word,
+            )
+            if base_relative
+            else find_addresses_no_kallsyms_base_relative(
+                rodata,
+                endianness,
+                num_syms_offset - len(names) * word.size
+                if addresses_first
+                else token_index_offset + 512,
+                len(names),
+                word,
+            )
+        )
         for _ in (
             logging.debug(
                 "0x%08X: kallsyms[0x%08X]",
-                addresses_offset,
-                token_index_offset + (256 * 2) - addresses_offset,
+                addresses_offset if addresses_first else num_syms_offset,
+                token_index_offset + 512 - addresses_offset
+                if addresses_first
+                else (
+                    align(addresses_end, word.size) + len(names) * 3 - num_syms_offset
+                ),
             ),
         )
-    ]:
+    ):
         return zip(addresses, names)
     return []
