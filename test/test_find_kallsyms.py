@@ -117,6 +117,19 @@ class TestFindKallsyms(unittest.TestCase):
             (0xFFFFFFFF84400000, "D__init_scratch_end"), addresses_and_names[-1]
         )
 
+    def test_kallsyms_6_2_8_x86_64(self):
+        addresses_and_names = list(
+            find_kallsyms_in_rodata(
+                self._read("kallsyms-6.2.8.seccon2023.kmemo.x86_64.gz")
+            )
+        )
+        self.assertEqual(24624, len(addresses_and_names))
+        self.assertEqual(
+            (0xFFFFFFFF81000000, "Tstartup_64"),
+            addresses_and_names[0],
+        )
+        self.assertEqual((0xFFFFFFFF81B4E01E, "T_einittext"), addresses_and_names[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

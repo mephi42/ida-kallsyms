@@ -83,9 +83,8 @@ def find_token_tables(rodata, token_index, token_index_offset):
         yield token_table_offset, token_table
 
 
-def find_markers(rodata, marker_fmt, marker_size, token_table_offset):
+def find_markers(rodata, marker_fmt, marker_size, marker_offset):
     first = True
-    marker_offset = token_table_offset - marker_size
     markers = []
     while True:
         # kallsyms_markers is an array of monotonically increasing offsets,
@@ -315,14 +314,16 @@ def find_kallsyms_in_rodata(rodata):
                 "0x%08X: kallsyms_token_table=%s", token_table_offset, token_table
             ),
         )
+        # In 6.2 (commits 60443c88f3a8 and 19bd8981dc2e) kallsyms_seqs_of_names
+        # was added between kallsyms_markers and kallsyms_token_table.
+        for markers_end_offset in range(token_table_offset, -4, -4)
         # In 4.20 the size of markers was reduced to 4 bytes.
         for marker_fmt, marker_size in (
             (endianness + "I", 4),
             (endianness + "Q", 8),
         )
-        for _ in (logging.debug("MARKER%d", marker_size * 8),)
         for markers_offset, markers in find_markers(
-            rodata, marker_fmt, marker_size, token_table_offset
+            rodata, marker_fmt, marker_size, markers_end_offset - marker_size
         )
         for _ in (
             logging.debug("0x%08X: kallsyms_markers=%s", markers_offset, markers),
