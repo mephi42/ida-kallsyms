@@ -20,8 +20,8 @@ class TestFindKallsyms(unittest.TestCase):
             find_kallsyms_in_rodata(self._read("kallsyms-4.16.3-301.fc28.s390x.gz"))
         )
         self.assertEqual(62766, len(addresses_and_names))
-        self.assertEqual((0, "T_text"), addresses_and_names[0])
-        self.assertEqual((0xD31E00, "B__bss_stop"), addresses_and_names[-1])
+        self.assertEqual((0x200, "T_text"), addresses_and_names[0])
+        self.assertEqual((0xD32000, "B__bss_stop"), addresses_and_names[-1])
 
     def test_kallsyms_3_10_0_x86_64(self):
         addresses_and_names = list(
@@ -57,8 +57,8 @@ class TestFindKallsyms(unittest.TestCase):
             )
         )
         self.assertEqual(117079, len(addresses_and_names))
-        self.assertEqual((0, "t_head"), addresses_and_names[0])
-        self.assertEqual((0x13CE000, "B_end"), addresses_and_names[-1])
+        self.assertEqual((0xFFFF000010080000, "t_head"), addresses_and_names[0])
+        self.assertEqual((0xFFFF00001144E000, "B_end"), addresses_and_names[-1])
 
     def test_kallsyms_5_3_0_x86_64(self):
         addresses_and_names = list(
