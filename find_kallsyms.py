@@ -267,6 +267,20 @@ def find_addresses_kallsyms_base_relative(
         )
         logging.debug("0x%08X: u32 kallsyms_offsets[]", addresses_offset)
 
+    # Try !KALLSYMS_ABSOLUTE_PERCPU first.
+    # A lot of small nonnegative numbers will match KALLSYMS_ABSOLUTE_PERCPU
+    # too, but it's more likely to be !KALLSYMS_ABSOLUTE_PERCPU.
+    addresses = []
+    for raw in raw_addresses:
+        address = kallsyms_relative_base + (raw & 0xFFFFFFFF)
+        if len(addresses) > 0 and address < addresses[-1]:
+            # The resulting addresses are not sorted.
+            break
+        addresses.append(address)
+    else:
+        log_ok()
+        yield addresses_offset, addresses_end, addresses
+
     # Try KALLSYMS_ABSOLUTE_PERCPU.
     addresses = []
     for raw in raw_addresses:
@@ -281,18 +295,6 @@ def find_addresses_kallsyms_base_relative(
     else:
         log_ok()
         yield addresses_offset, relative_base_end, addresses
-
-    # Try !KALLSYMS_ABSOLUTE_PERCPU.
-    addresses = []
-    for raw in raw_addresses:
-        address = kallsyms_relative_base + (raw & 0xFFFFFFFF)
-        if len(addresses) > 0 and address < addresses[-1]:
-            # The resulting addresses are not sorted.
-            break
-        addresses.append(address)
-    else:
-        log_ok()
-        yield addresses_offset, addresses_end, addresses
 
 
 def find_kallsyms_in_rodata(rodata):
