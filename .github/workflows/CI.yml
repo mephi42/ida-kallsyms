@@ -8,14 +8,14 @@ name: Continuous integration
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - uses: actions/checkout@v3
 
     - name: Install packages
       run: sudo apt-get update &&
-           sudo apt-get install -y black flake8 python2 python3 jython
+           sudo apt-get install -y black flake8 python2 python3 jython pypy3
 
     - name: Check formatting
       run: ./black --check
@@ -28,3 +28,6 @@ jobs:
 
     - name: Test jython
       run: jython -m unittest discover
+
+    - name: Test pypy3
+      run: pypy3 -m unittest discover
