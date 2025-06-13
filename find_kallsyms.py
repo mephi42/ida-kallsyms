@@ -116,11 +116,15 @@ def find_markers(rodata, marker_fmt, marker_size, marker_offset):
     yield marker_offset, markers
 
 
+# Since v6.1 (commit b8a94bfb3395).
+KSYM_NAME_LEN = 512
+
+
 def is_name_ok(rodata, token_lengths, offset):
     n_tokens = ord(rodata[offset : offset + 1])
-    if n_tokens == 0 or n_tokens >= 128:
+    if n_tokens == 0 or n_tokens >= KSYM_NAME_LEN:
         # Tokens are at least one byte long. Names must not be empty, and they
-        # must be at most 127 characters long.
+        # must be at most KSYM_NAME_LEN-1 characters long.
         return False
     offset += 1
     name_length = 0
@@ -128,8 +132,8 @@ def is_name_ok(rodata, token_lengths, offset):
         # The caller is expected to have verified that the name entry does not
         # span past the end of kallsyms_names, so just fetch the next token.
         name_length += token_lengths[ord(rodata[offset : offset + 1])]
-        if name_length >= 128:
-            # Name is longer than 127 characters.
+        if name_length >= KSYM_NAME_LEN:
+            # Name is longer than KSYM_NAME_LEN-1 characters.
             return False
         offset += 1
     return True
@@ -353,12 +357,16 @@ def find_kallsyms_in_rodata(rodata):
             find_addresses_kallsyms_base_relative(
                 rodata,
                 endianness,
-                align_up(
-                    align_up(num_syms_offset, word.size) - word.size - len(names) * 4,
-                    word.size,
-                )
-                if addresses_first
-                else align(token_index_offset + 512, word.size),
+                (
+                    align_up(
+                        align_up(num_syms_offset, word.size)
+                        - word.size
+                        - len(names) * 4,
+                        word.size,
+                    )
+                    if addresses_first
+                    else align(token_index_offset + 512, word.size)
+                ),
                 len(names),
                 word,
             )
@@ -366,9 +374,11 @@ def find_kallsyms_in_rodata(rodata):
             else find_addresses_no_kallsyms_base_relative(
                 rodata,
                 endianness,
-                num_syms_offset - len(names) * word.size
-                if addresses_first
-                else token_index_offset + 512,
+                (
+                    num_syms_offset - len(names) * word.size
+                    if addresses_first
+                    else token_index_offset + 512
+                ),
                 len(names),
                 word,
             )
@@ -377,10 +387,14 @@ def find_kallsyms_in_rodata(rodata):
             logging.debug(
                 "0x%08X: kallsyms[0x%08X]",
                 addresses_offset if addresses_first else num_syms_offset,
-                token_index_offset + 512 - addresses_offset
-                if addresses_first
-                else (
-                    align(addresses_end, word.size) + len(names) * 3 - num_syms_offset
+                (
+                    token_index_offset + 512 - addresses_offset
+                    if addresses_first
+                    else (
+                        align(addresses_end, word.size)
+                        + len(names) * 3
+                        - num_syms_offset
+                    )
                 ),
             ),
         )
