@@ -1,36 +1,13 @@
 import json
 
 from idc import add_struc, add_struc_member, apply_type, del_struc_member, parse_decl
-from ida_bytes import del_items, FF_BYTE, FF_DATA
-from ida_name import get_name_ea, is_uname, set_name
+from ida_bytes import FF_BYTE, FF_DATA
+from ida_name import get_name_ea
 from ida_struct import get_struc_id
 from idaapi import BADADDR, get_inf_structure
 from idautils import StructMembers
 
-
-def parse_kallsyms(fp):
-    for line in fp:
-        address, name = line.strip().split()
-        yield int(address, 16), name
-
-
-def _is_uname(name):
-    return is_uname(name) and name not in (
-        "class",
-        "new",
-    )
-
-
-def apply_kallsyms(kallsyms):
-    for address, name in kallsyms:
-        if name[0] != "A":
-            new_name = str(name[1:])
-            if not _is_uname(new_name):
-                new_name = "_" + new_name
-            if _is_uname(new_name):
-                if not set_name(address, new_name):
-                    del_items(address)
-                    set_name(address, new_name)
+from ida_kallsyms_utils import _is_uname
 
 
 DEFAULT_TYPE = "char"
